@@ -606,7 +606,8 @@ class CoupleRelay:
                 await asyncio.sleep(random.uniform(0.6, 1.2))
 
         me_token = self._ctx_tokens.get("me", "")
-        await self.send_to_me(ai_text, me_token)
+        me_text = "\n".join(f"【第{i+1}条】：{p}" for i, p in enumerate(parts)) if len(parts) > 1 else ai_text
+        await self.send_to_me(me_text, me_token)
 
         self.context.add("ai", ai_text)
 
