@@ -197,7 +197,69 @@ sudo systemctl start couple-relay-2
 | `max_tokens` | `150` | AI 回复最大 token 数 |
 | `temperature` | `0.9` | 随机性，越高越随机 |
 
-> ⚠ **重要更新（v2.1）：** 现在 AI 回复使用**简化 system prompt + few-shot 示例（真实聊天记录）**，不再依赖冗长的散文式人设描述。同时**后端强制拆句**（`_force_split`），无论 AI 输出什么格式，都会按 句尾 → 逗号 → 15字硬切 的顺序拆分成多条短消息发送。
+> ⚠ **重要更新（v2.1）：** 现在 AI 回复使用**简化 system prompt + few-shot 示例驱动**，不再依赖冗长的散文式人设描述。同时**后端强制拆句**（`_force_split`），无论 AI 输出什么格式，都会自动拆成短消息发送。
+
+## ✏️ 自定义 AI 人设
+
+AI 的效果取决于三个地方，按优先顺序：
+
+### 1. few-shot 示例（最重要的）
+
+**文件：** `couple_relay.py` 中的 `FEW_SHOT_EXAMPLES` 列表
+
+这是让 AI 模仿你说话风格的核心。默认提供的是通用模板示例，建议替换为你自己的聊天记录：
+
+```python
+FEW_SHOT_EXAMPLES = [
+    {"role": "user", "content": "对方说的话"},
+    {"role": "assistant", "content": "你的回复"},
+    {"role": "user", "content": "对方说的另一句"},
+    {"role": "assistant", "content": "你的回复"},
+    # ... 推荐 50-100 组，覆盖不同场景
+]
+```
+
+**格式：** `user` = 对方发的话，`assistant` = 你的回复。一对方一你交替排列。
+
+**覆盖场景：** 日常报备、撒娇打闹、哄人安抚、甜蜜表白、抱怨吐槽、接梗玩闹
+
+### 2. system prompt（硬规则）
+
+**文件：** `couple_relay.py` 中的 `system_prompt` 变量
+
+这里定义 AI 回复的硬规则，根据你的关系调整：
+
+| 规则 | 说明 |
+|------|------|
+| 每条不超过15字 | 短消息感 |
+| 禁止括号动作 | 不许写（笑）（无语） |
+| 禁止书面语/大道理 | 要像真人聊天 |
+| 多叫爱称 | 根据你们的关系改 |
+
+### 3. persona.json（人设描述）
+
+**文件：** `data_dir/persona.json`（安装时生成）
+
+此处写一段描述告诉 AI 你们的关系和你希望它扮演的角色：
+
+```json
+{
+  "persona": "你是对方的男朋友，发自内心喜欢她...",
+  "delay_seconds": 4,
+  "model": "deepseek-chat",
+  "api_key": "sk-xxxxxx"
+}
+```
+
+改完无需重启，保存即生效（热加载）。
+
+### 推荐流程
+
+1. 先用默认配置跑起来，看 AI 回的是不是你要的风格
+2. 翻一遍你们的聊天记录，挑 50-100 组有代表性的对话
+3. 替换 `FEW_SHOT_EXAMPLES` 中的示例
+4. 微调 `persona.json` 里的描述字段
+5. 测试，迭代
 
 ## 常用操作
 
