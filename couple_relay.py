@@ -255,9 +255,94 @@ class PersonaConfig:
 class AIClient:
     def __init__(self, persona: PersonaConfig):
         self.persona = persona
+        self.character: dict = {}
+        self.worldbook: list[dict] = []
+        self._load_lore()
 
-    # 从真实聊天记录提取的 few-shot 示例（本人回复风格）
-    FEW_SHOT_EXAMPLES = [
+    def _load_lore(self) -> None:
+        lore_dir = Path(__file__).parent / "lore"
+        char_file = lore_dir / "character.json"
+        wb_file = lore_dir / "worldbook.json"
+        if char_file.exists():
+            try:
+                with open(char_file, "r", encoding="utf-8") as f:
+                    self.character = json.load(f)
+                logger.info(f"[角色卡] 已加载: {self.character.get('name', '?')} ({len(self.character.get('example_dialogs', []))}条示例)")
+            except Exception as e:
+                logger.warning(f"[角色卡] 加载失败: {e}")
+        if wb_file.exists():
+            try:
+                with open(wb_file, "r", encoding="utf-8") as f:
+                    self.worldbook = json.load(f)
+                logger.info(f"[世界书] 已加载: {len(self.worldbook)} 个条目")
+            except Exception as e:
+                logger.warning(f"[世界书] 加载失败: {e}")
+
+    def match_worldbook(self, text: str) -> list[dict]:
+        """匹配世界书条目,按 priority 排序"""
+        matched = []
+        for entry in self.worldbook:
+            for kw in entry.get("keys", []):
+                if kw in text:
+                    matched.append(entry)
+                    break
+        matched.sort(key=lambda e: -e.get("priority", 0))
+        return matched
+
+    def build_prompt(self, partner_text: str = "", rag_examples: list[dict] | None = None) -> str:
+        """酒馆式 prompt 构建"""
+        char = self.character
+        if not char:
+            return ""
+        
+        parts = []
+        
+        # 1. 基础系统提示
+        parts.append("你现在是" + char.get("name", "杨群") + "，以下是你的设定：")
+        
+        # 2. Bio
+        if char.get("description"):
+            parts.append(f"[角色] {char['description']}")
+        
+        # 3. Personality
+        if char.get("personality"):
+            pers = "\n".join(f"· {p}" for p in char["personality"])
+            parts.append(f"[性格]\n{pers}")
+        
+        # 4. Scenario
+        if char.get("scenario"):
+            parts.append(f"[场景] {char['scenario']}")
+        
+        # 5. 世界书（关键词触发）
+        world_matched = self.match_worldbook(partner_text) if partner_text else []
+        if world_matched:
+            wb_parts = []
+            for entry in world_matched:
+                wb_parts.append(f"· {entry['content']}")
+            wb_text = '\n'.join(wb_parts)
+            parts.append(f"[背景知识]\n{wb_text}")
+        
+        # 6. Extra rules
+        if char.get("system_prompt_extra"):
+            parts.append(f"[规则] {char['system_prompt_extra']}")
+        
+        # 7. Example dialogs
+        if char.get("example_dialogs"):
+            parts.append("[对话示例] 以下是你过去的回复方式：")
+            for ex in char["example_dialogs"][:20]:  # 最多20条
+                parts.append(f"  对方: {ex['user']}")
+                parts.append(f"  你: {ex['assistant']}")
+        
+        parts.append("现在开始用同样的风格聊天，每条消息短小自然，不要一次性说太长，想说的内容分多条消息发送，用换行分隔。")
+        
+        return "\n\n".join(parts)
+
+    # 从真实聊天记录提取的 few-shot 示例（现从角色卡加载）
+    @property
+    def FEW_SHOT_EXAMPLES(self):
+        return self.character.get("example_dialogs", [])[:30]
+
+    # 兼容旧版本（保留，但不再使用）
         {"role": "user", "content": "累死了"},
         {"role": "assistant", "content": "抱抱，辛苦了"},
         {"role": "user", "content": "哼"},
@@ -298,19 +383,6 @@ class AIClient:
         {"role": "assistant", "content": "晚安，亲一口"},
         {"role": "user", "content": "你气死我了"},
         {"role": "assistant", "content": "哈哈哈哈哈哈，我错了"},
-        {"role": "user", "content": "你真行"},
-        {"role": "assistant", "content": "那必须的"},
-    ]
-
-    # 模板对话示例说明：
-    # 以上为通用示例，用于演示回复风格。
-    # 建议替换为你自己的真实聊天记录以获得更好的模仿效果。
-    # 替换方法：
-    #   编辑 couple_relay.py 中的 FEW_SHOT_EXAMPLES 列表，
-    #   格式为 {"role": "user", "content": "对方说的话"},
-    #          {"role": "assistant", "content": "你的回复"}，
-    #   一对方一自己交替排列。推荐 50-100 组。
-
     async def reply(self, messages: list[dict]) -> str:
         if not self.persona.ai_available():
             return ""
@@ -615,7 +687,16 @@ class CoupleRelay:
         if mood_temp is not None:
             self.ai.persona.temperature = mood_temp
 
-        ai_text = await self.ai.reply(ai_messages)
+        # 获取对象最新消息用于世界书匹配
+        partner_text_for_wb = ""
+        try:
+            pmsgs = self.context.get_partner_latest(1)
+            if pmsgs:
+                partner_text_for_wb = pmsgs[0]
+        except Exception:
+            pass
+
+        ai_text = await self.ai.reply(ai_messages, partner_text=partner_text_for_wb, rag_examples=rag_examples)
 
         if mood_temp is not None:
             self.ai.persona.temperature = saved_temp
