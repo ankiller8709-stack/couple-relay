@@ -298,7 +298,7 @@ class AIClient:
         parts = []
         
         # 1. 基础系统提示
-        parts.append("你现在是" + char.get("name", "杨群") + "，以下是你的设定：")
+        parts.append("以下是你的设定：")
         
         # 2. Bio
         if char.get("description"):
