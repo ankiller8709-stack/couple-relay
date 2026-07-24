@@ -319,7 +319,10 @@ class AIClient:
                 "你是对方的另一半，在用微信给对方聊天。"
                 "下面是你自己的聊天记录示例，请严格模仿语气，不要自由发挥。\n\n"
                 "硬规则：\n"
-                "1. 每条不超过15个字，想说的话拆成多条。\n"
+                "1. 用换行分隔多条消息，每条不超过15个字，比如：\n"
+                "   老婆\n"
+                "   哈哈哈哈哈哈\n"
+                "   我想死你了\n"
                 "2. 绝对禁止括号动作描述 —— 不许写（笑）（无语）（愣住）这类东西。\n"
                 "3. 禁止书面语、大道理、总结、排比句。\n"
                 "4. 你就是个人，禁止提到AI、机器人、模型、回答、回复这些词。\n"
@@ -476,27 +479,34 @@ class CoupleRelay:
     def _mark_sent(self, key: str, text: str) -> None:
         self._recently_sent.append((key, text, time.time()))
 
-    async def send_to_partner(self, text: str, context_token: str = "") -> bool:
+    async def send_to_partner(self, text: str, context_token: str = "", max_retries: int = 3) -> bool:
         acc = self.config.partner
         client = acc["client"]
         if not client:
             return False
-        try:
-            if context_token:
-                await client.send_text(
-                    to_user_id=acc["wechat_user_id"],
-                    text=text,
-                    context_token=context_token,
-                )
-            else:
-                logger.warning("[发送→对象] 没有 context_token，无法发送")
-                return False
-            logger.info(f"[发送→对象] {text[:80]}")
-            self._mark_sent("partner", text)
-            return True
-        except Exception as e:
-            logger.error(f"[发送→对象] 失败: {e}")
-            return False
+        for attempt in range(1, max_retries + 1):
+            try:
+                if context_token:
+                    await client.send_text(
+                        to_user_id=acc["wechat_user_id"],
+                        text=text,
+                        context_token=context_token,
+                    )
+                else:
+                    logger.warning("[发送→对象] 没有 context_token")
+                    return False
+                logger.info(f"[发送→对象] {text[:80]}")
+                self._mark_sent("partner", text)
+                return True
+            except Exception as e:
+                err_str = str(e)
+                if "ret=-2" in err_str and attempt < max_retries:
+                    logger.warning(f"[发送→对象] ret=-2, 重试第{attempt}次...")
+                    await asyncio.sleep(1.0)
+                else:
+                    logger.error(f"[发送→对象] 失败({attempt}/{max_retries}): {e}")
+                    return False
+        return False
 
     async def send_media_to_partner(self, file_path: str, context_token: str = "", caption: str = "") -> bool:
         acc = self.config.partner
@@ -614,25 +624,25 @@ class CoupleRelay:
     def _force_split(self, text: str, max_len: int = 15) -> list[str]:
         """
         强制将一段文字拆成多条短消息。
-        优先级: 换行 > 句号/叹号/问号 > 逗号 > 硬切(按字数)
+        策略(非级联!):先按换行拆,每条过长时再按标点/硬切拆。
         """
-        # 1) 按换行拆
-        raw = [s.strip() for s in text.replace('\r\n', '\n').split('\n') if s.strip()]
-        if raw:
-            text = ''.join(raw)
+        import re
 
-        # 2) 按句子结束标点拆(连续标点合并,避免拆出空段)
-        text = re.sub(r'([。！？!?.…~])\1+', r'\1', text)
-        sentences = re.split(r'(?<=[。！？!?.…~])[\s]*', text)
-        sentences = [s.strip() for s in sentences if s.strip()]
-        if not sentences:
-            sentences = [text]
-
-        # 3) 每条太长时按逗号/分号/空格进一步拆
-        def _chunk(s: str) -> list[str]:
+        def _chunk_one(s: str) -> list[str]:
+            """将一条文本拆到不超过 max_len"""
             if len(s) <= max_len:
                 return [s]
-            segs = re.split(r'(?<=[,，、；;])[\s]*', s)
+
+            laugh_match = re.match(r'^([哈呵嘿噗]{2,})(.+)$', s)
+            if laugh_match:
+                laugh_part = laugh_match.group(1)
+                rest = laugh_match.group(2).strip()
+                if rest and len(laugh_part) <= max_len:
+                    result = [laugh_part]
+                    result.extend(_chunk_one(rest))
+                    return result
+
+            segs = re.split(r'(?<=[,，、；;])\s*', s)
             segs = [x.strip() for x in segs if x.strip()]
             if len(segs) <= 1:
                 return [s[i:i+max_len] for i in range(0, len(s), max_len)]
@@ -649,17 +659,27 @@ class CoupleRelay:
                 result.append(buf)
             return result
 
+        lines = [s.strip() for s in text.replace('\r\n', '\n').split('\n') if s.strip()]
+        if not lines:
+            return []
+
+        temp = []
+        for line in lines:
+            collapsed = re.sub(r'([。！？!?.…~])\1+', r'\1', line)
+            parts = re.split(r'(?<=[。！？!?.…~])\s*', collapsed)
+            temp.extend(p.strip() for p in parts if p.strip())
+        lines = temp if temp else lines
+
         final = []
-        for s in sentences:
-            final.extend(_chunk(s))
+        for line in lines:
+            final.extend(_chunk_one(line))
 
-        if len(final) == 1 and len(final[0]) > max_len:
-            t = final[0]
-            final = [t[i:i+max_len] for i in range(0, len(t), max_len)]
+        final = [
+            p for p in final
+            if p and p.strip() and not all(c in '。，！？、；：,.!?;:\u7684\u4e86\u6211' for c in p)
+        ]
 
-        final = [p.strip() for p in final if p and p.strip() and not all(c in '。，！？、；：,.!?;:的了我' for c in p)]
         return final
-
     async def _handle_media(self, msg: Any, media_items: list, direction: str) -> None:
         desc = msg.text() if hasattr(msg, "text") and callable(msg.text) else "[媒体]"
         logger.info(f"[媒体] 收到 {desc}，方向={direction}")
