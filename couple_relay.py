@@ -409,6 +409,15 @@ class ContextStore:
                 return False
         return False
 
+    def get_partner_latest(self, count: int = 1) -> list[str]:
+        texts = []
+        for m in reversed(self.messages):
+            if m["role"] == "partner":
+                texts.append(m["text"])
+                if len(texts) >= count:
+                    break
+        return texts
+
 
 # ============== 核心继电器 ==============
 class CoupleRelay:
@@ -585,7 +594,32 @@ class CoupleRelay:
         if not self.context.ends_with_partner():
             return
 
-        ai_text = await self.ai.reply(self.context.to_ai_messages())
+        # RAG + 情绪感知
+        rag_examples = []
+        mood_label = "neutral"
+        mood_temp = None
+        try:
+            partner_msgs = self.context.get_partner_latest(1)
+            if partner_msgs:
+                rag_examples, mood_label, mood_temp = _ai_reply_with_context(partner_msgs[0])
+                if mood_label != "neutral":
+                    logger.info(f"[情绪] 检测到: {mood_label}, temp={mood_temp}")
+        except Exception as e:
+            logger.warning(f"[RAG/情绪] 异常: {e}")
+
+        ai_messages = self.context.to_ai_messages()
+        if rag_examples:
+            ai_messages = rag_examples + ai_messages
+
+        saved_temp = self.ai.persona.temperature
+        if mood_temp is not None:
+            self.ai.persona.temperature = mood_temp
+
+        ai_text = await self.ai.reply(ai_messages)
+
+        if mood_temp is not None:
+            self.ai.persona.temperature = saved_temp
+
         if not ai_text or not ai_text.strip():
             ai_text = "哈哈哈哈哈哈哈哈"
             logger.info(f"[AI回复] 空回复，使用兜底: {ai_text}")
@@ -973,8 +1007,116 @@ async def main():
         pass
 
 
+_rag_index: "RAGIndex" | None = None
+
+
+# ============== RAG 聊天历史检索 ==============
+class RAGIndex:
+    CSV_PATH = DATA_DIR / "chat_history.csv"
+    
+    def __init__(self):
+        self.pairs: list[tuple[str, str]] = []
+        self.word_index: dict[str, list[tuple[int, int]]] = {}
+        self.loaded = False
+        
+    def load(self) -> None:
+        if self.loaded:
+            return
+        if not self.CSV_PATH.exists():
+            logger.warning(f"[RAG] 聊天历史不存在: {self.CSV_PATH}")
+            return
+        try:
+            import csv
+            from collections import defaultdict
+            messages = []
+            with open(self.CSV_PATH, "r", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                next(reader)
+                for row in reader:
+                    if len(row) >= 5:
+                        sender = row[2].strip()
+                        content = row[4].strip()
+                        if content and content not in ("", "以上是打招呼的消息"):
+                            messages.append((sender, content))
+            for i in range(len(messages) - 1):
+                cur_sender, cur_msg = messages[i]
+                next_sender, next_msg = messages[i + 1]
+                if "\u8bda\u4fe1" in cur_sender and "\u6768\u7fa4" in next_sender:
+                    self.pairs.append((cur_msg, next_msg))
+            for idx, (partner_msg, _) in enumerate(self.pairs):
+                words = self._tokenize(partner_msg)
+                word_counts = defaultdict(int)
+                for w in words:
+                    word_counts[w] += 1
+                for w, cnt in word_counts.items():
+                    if w not in self.word_index:
+                        self.word_index[w] = []
+                    self.word_index[w].append((idx, cnt))
+            self.loaded = True
+            logger.info(f"[RAG] \u5df2\u52a0\u8f7d {len(self.pairs)} \u4e2a\u5bf9\u8bdd\u5bf9, {len(self.word_index)} \u4e2a\u8bcd")
+        except Exception as e:
+            logger.error(f"[RAG] \u52a0\u8f7d\u5931\u8d25: {e}")
+    
+    def _tokenize(self, text: str) -> list[str]:
+        import re
+        return re.findall(r'[\u4e00-\u9fff]{2,}', text)
+    
+    def search(self, query: str, top_k: int = 3) -> list[tuple[str, str]]:
+        if not self.loaded or not self.pairs:
+            return []
+        query_words = set(self._tokenize(query))
+        if not query_words:
+            return []
+        scores = []
+        for idx, (partner_msg, user_reply) in enumerate(self.pairs):
+            msg_words = set(self._tokenize(partner_msg))
+            overlap = len(query_words & msg_words)
+            if overlap > 0:
+                scores.append((overlap, idx, partner_msg, user_reply))
+        scores.sort(key=lambda x: -x[0])
+        return [(p, r) for _, _, p, r in scores[:top_k]]
+
+
+def detect_emotion(text: str) -> tuple[str, float]:
+    emotions = {
+        "angry": {"keywords": ["\u70e6", "\u6c14", "\u6eda", "\u8ba8\u538c", "\u6253\u6b7b", "\u9020\u53cd", "\u4e0d\u60f3\u7406", "\u4f60\u7ba1\u6211"], "temp": 0.5},
+        "sad": {"keywords": ["\u7d2f", "\u96be\u53d7", "\u59d4\u5c48", "\u54ed\u4e86", "\u4e0d\u5f00\u5fc3", "\u6ca1\u52b2", "\u4e0d\u60f3\u5e72\u4e86"], "temp": 0.6},
+        "playful": {"keywords": ["\u54fc", "\u6253\u4f60", "\u8ba8\u538c", "\u5c31\u6c14\u4f60", "\u563b\u563b", "\u5c31\u4e0d", "\u4e0d\u8981", "\u6c14\u6b7b\u4f60"], "temp": 0.9},
+        "happy": {"keywords": ["\u5f00\u5fc3", "\u559c\u6b22", "\u7231\u4f60", "\u60f3\u4f60", "\u54c8\u54c8", "\u7b11\u6b7b"], "temp": 0.85},
+        "anxious": {"keywords": ["\u62c5\u5fc3", "\u6015", "\u600e\u4e48\u529e", "\u5bb3\u6015"], "temp": 0.6},
+        "complaint": {"keywords": ["\u53c8", "\u8001\u662f", "\u6bcf\u6b21\u90fd", "\u4f60\u90fd\u4e0d", "\u70e6\u6b7b\u4e86"], "temp": 0.55},
+    }
+    best_label = "neutral"
+    best_score = 0
+    for label, config in emotions.items():
+        score = sum(1 for kw in config["keywords"] if kw in text)
+        if score > best_score:
+            best_score = score
+            best_label = label
+    if best_label == "neutral":
+        return "neutral", 0.8
+    return best_label, emotions[best_label]["temp"]
+
+
+def _ai_reply_with_context(partner_text: str) -> tuple[list[dict], str, float]:
+    global _rag_index
+    if _rag_index is None:
+        _rag_index = RAGIndex()
+        _rag_index.load()
+    if _rag_index.loaded:
+        rag_results = _rag_index.search(partner_text, top_k=3)
+    else:
+        rag_results = []
+    mood_label, mood_temp = detect_emotion(partner_text)
+    rag_examples = []
+    for partner_msg, user_reply in rag_results:
+        rag_examples.append({"role": "user", "content": partner_msg})
+        rag_examples.append({"role": "assistant", "content": user_reply})
+    return rag_examples, mood_label, mood_temp
+
+
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n已停止")
+        print("\n\u5df2\u505c\u6b62")
