@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
 """
-Couple Relay - 双账号微信消息同步 + AI 伴聊
-独立运行版本，通过 config.json 配置，不硬编码任何信息
+FNchat 双账号消息同步 + AI 回复脚本 v2
 
-用法:
-  python3 couple_relay.py --config /path/to/config.json
-
-配置文件格式见 install.sh 生成的 config.json
+核心思路:直接用 weixin-channel-sdk 的 WeixinBot 轮询微信消息
+(不读数据库,因为 context_token 只有 SDK 消息对象里有)
+收到消息时拿到 context_token,转发给对方 + 触发 AI
 """
 
-import argparse
 import asyncio
 import json
 import logging
 import os
 import random
-import re
 import sys
 import time
 import traceback
@@ -26,58 +22,11 @@ from typing import Any, Optional
 
 import httpx
 
+# ============== SDK 路径 ==============
+SDK_SRC = "/vol2/@appcenter/fnchat/server/weixin-channel-sdk/src"
+if SDK_SRC not in sys.path:
+    sys.path.insert(0, SDK_SRC)
 
-# ============== 配置加载 ==============
-class Config:
-    """从 JSON 文件加载所有配置"""
-
-    def __init__(self, config_path: str):
-        self.config_path = Path(config_path)
-        if not self.config_path.exists():
-            print(f"配置文件不存在: {self.config_path}")
-            sys.exit(1)
-
-        with open(self.config_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        self.fnchat_dir = Path(data["fnchat_dir"])
-        self.sdk_src = data["sdk_src"]
-
-        self.me = data["me"]
-        self.partner = data["partner"]
-        self.me["data_dir"] = Path(self.me["data_dir"])
-        self.partner["data_dir"] = Path(self.partner["data_dir"])
-
-        self.data_dir = Path(data.get("data_dir", self.config_path.parent))
-
-        # 派生路径
-        self.me["store_dir"] = self.me["data_dir"] / "wechat"
-        self.partner["store_dir"] = self.partner["data_dir"] / "wechat"
-        self.me["session_dir"] = self.me["data_dir"] / "wechat/accounts"
-        self.partner["session_dir"] = self.partner["data_dir"] / "wechat/accounts"
-
-        # 文件路径
-        self.state_file = self.data_dir / "state.json"
-        self.context_file = self.data_dir / "context.json"
-        self.persona_file = self.data_dir / "persona.json"
-        self.log_dir = Path("/tmp/couple-relay")
-        self.log_file = self.log_dir / "relay.log"
-
-        # SDK 路径
-        if self.sdk_src not in sys.path:
-            sys.path.insert(0, self.sdk_src)
-
-        self.me["client"] = None
-        self.me["bot"] = None
-        self.me["bot_account_id"] = None
-        self.me["session_file"] = None
-        self.partner["client"] = None
-        self.partner["bot"] = None
-        self.partner["bot_account_id"] = None
-        self.partner["session_file"] = None
-
-
-# ============== SDK 导入 ==============
 try:
     from weixin_channel import AccountSession, WeixinClient, WeixinBot, StateStore  # type: ignore
 except Exception as _e:
@@ -89,10 +38,72 @@ except Exception as _e:
 else:
     _sdk_err = ""
 
+# ============== 固定路径 ==============
+DATA_DIR = Path("/vol2/@appshare/fnchat")
+STATE_FILE = DATA_DIR / "relay_v2_state.json"
+CONTEXT_FILE = DATA_DIR / "relay_v2_context.json"
+PERSONA_FILE = DATA_DIR / "relay_v2_persona.json"
+LOG_DIR = Path("/vol2/@appshare/fnchat")
+LOG_FILE = LOG_DIR / "fnchat_relay.log"
 
-# ============== 常量 ==============
 MAX_CONTEXT = 50
 SENT_DEDUPE_SEC = 15
+
+
+# ============== 账号配置 ==============
+# xs = 你 (你的微信跟你的 clawbot 聊)
+# xm = 对象 (对象的微信跟对象的 clawbot 聊)
+#
+# 你发消息到你的 clawbot → 脚本用对象的 bot 转发给对象的微信
+# 对象发消息到对象的 clawbot → 脚本用你的 bot 转发给你的微信
+
+# store 目录(复用 fnchat 已有的 wechat 目录,这样 cursor 也共享)
+STORE_DIR_ME = DATA_DIR / "userdata/xs-data/wechat"
+STORE_DIR_PARTNER = DATA_DIR / "userdata/xm-data/wechat"
+
+ACCOUNTS = {
+    "me": {
+        "label": "你(xs)",
+        "session_dir": DATA_DIR / "userdata/xs-data/wechat/accounts",
+        "wechat_user_id": "o9cq804643DrY4id8sHzse0ccMr4@im.wechat",  # 你的微信
+        "store_dir": STORE_DIR_ME,
+        "session_file": None,
+        "bot_account_id": None,
+        "client": None,
+        "bot": None,
+    },
+    "partner": {
+        "label": "对象(xm)",
+        "session_dir": DATA_DIR / "userdata/xm-data/wechat/accounts",
+        "wechat_user_id": "o9cq806remfKKG1_WCL96fS5eYmU@im.wechat",  # 对象的微信
+        "store_dir": STORE_DIR_PARTNER,
+        "session_file": None,
+        "bot_account_id": None,
+        "client": None,
+        "bot": None,
+    },
+}
+
+
+# ============== 日志 ==============
+def setup_logging():
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        ],
+    )
+    return logging.getLogger("relay_v2")
+
+
+logger = setup_logging()
+if _sdk_err:
+    logger.error(f"SDK 导入失败: {_sdk_err}")
+    logger.error("请确认 weixin-channel-sdk 路径正确")
+    sys.exit(1)
 
 
 # ============== 工具函数 ==============
@@ -147,49 +158,15 @@ def load_session(path: Path) -> Optional[Any]:
         return None
 
 
-def auto_detect_wechat_user_id(acc: dict) -> str:
-    """从 session 文件或 accounts.json 中自动探测 wechat_user_id"""
-    session_file = acc.get("session_file")
-    if session_file:
-        raw = load_json(session_file)
-        uid = raw.get("user_id", "")
-        if uid:
-            return uid
-
-    # 尝试从 accounts.json 读
-    accounts_json = acc["data_dir"] / "accounts.json"
-    data = load_json(accounts_json, [])
-    if isinstance(data, list):
-        for item in data:
-            uid = item.get("user_id", "")
-            if uid:
-                return uid
-    elif isinstance(data, dict):
-        uid = data.get("user_id", "")
-        if uid:
-            return uid
-
-    # 尝试从 account-session.json 读
-    acc_session = acc["data_dir"] / "account-session.json"
-    data = load_json(acc_session, {})
-    if isinstance(data, dict):
-        uid = data.get("user_id", "")
-        if uid:
-            return uid
-
-    return ""
-
-
-# ============== 人格配置(热加载) ==============
+# ============== 人格配置(热加载)=============
 class PersonaConfig:
-    def __init__(self, persona_file: Path):
-        self.file = persona_file
+    def __init__(self):
         self._mtime = 0
         self._load()
 
     def _load(self) -> None:
         try:
-            st = self.file.stat()
+            st = PERSONA_FILE.stat()
             if st.st_mtime == self._mtime:
                 return
             self._mtime = st.st_mtime
@@ -197,51 +174,50 @@ class PersonaConfig:
             self._write_default()
             return
 
-        data = load_json(self.file, {})
+        data = load_json(PERSONA_FILE, {})
         self.ai_enabled = data.get("ai_enabled", True)
-        self.persona = data.get("persona", "你是一位温柔体贴的伴侣，说话简短自然。请用中文回复。")
+        self.persona = data.get("persona", "你是一位温柔体贴的伴侣,说话简短自然,像朋友一样聊天。请用中文回复。")
         self.delay_seconds = float(data.get("delay_seconds", 4))
-        self.model = data.get("model", "deepseek-chat")
+        self.model = data.get("model", "deepseek-v4-flash")
         self.api_key = data.get("api_key", "")
         self.base_url = data.get("base_url", "https://api.deepseek.com")
-        self.max_tokens = int(data.get("max_tokens", 150))
-        self.temperature = float(data.get("temperature", 0.9))
+        self.max_tokens = int(data.get("max_tokens", 300))
+        self.temperature = float(data.get("temperature", 0.8))
         logger.info(f"人格配置已加载: ai={self.ai_enabled} model={self.model} delay={self.delay_seconds}s")
 
     def _write_default(self) -> None:
         default = {
             "ai_enabled": True,
             "persona": (
-                "你是我的AI替身，替我回复对象（我老婆），"
-                "一次发多条，不允许一条长内容，哈哈哈哈哈至少8个算一条消息。"
-                "你的人设：发自内心喜欢她，习惯迁就包容她的小情绪。"
-                "她嘴硬傲娇爱说反话，闹脾气时你先安抚哄她，不争辩。"
-                "高频用emoji表情，哈哈哈哈至少8个哈起步。"
-                "口头禅：老婆、笨蛋、好不好、就气你、凭啥啊、你看我多听话。"
-                "认错要快，撒娇邀功。被怼了用哈哈哈接住再反击。"
-                "允许口语碎片，啊嗯噗嘿嘿嘿都行。"
-                "\n\n绝对禁止："
-                "1.不要用括号写动作描述比如（笑）（愣住）"
-                "2.不要写小说式的叙述比如紧接着语气一转"
-                "3.每条不超过15个字"
-                "4.想说的话多就用换行分成多条"
-                "5.不要用书面语排比句总结升华"
-                "6.不要解释你在干什么直接说内容"
+                "你是我对象的AI男朋友,发自内心很喜欢她,习惯性迁就、包容她所有小情绪。"
+                "你是替我回复对象的,只需要理解我说的,不要回复我的消息,"
+                "你聊天习惯偏爱短句,喜欢打一连串哈哈,你的消息会分为简短的、好几条、发送过去。"
+                "她平时嘴硬傲娇,喜欢说反话,闹小脾气的时候,我不会和她争辩,优先耐心安抚哄她。"
+                "哪怕她不断试探、开玩笑,我心里只有她,坚定想要和她长期走下去。"
+                "我的相处准则:幽默是外壳,真心是内核;遇事永远站在她这边,不会讲空洞大道理;"
+                "发生矛盾我会主动低头认错,不会冷处理;聊天随性自然,可以跳话题,拒绝工整冗长的文字。"
+                "的第一反应永远是我的人不能受委屈,别人说啥你先站自己人这边。"
+                "吵架了你先认错,我错了说六遍比讲一番道理管用,面子不值钱关系值钱。"
+                "表面永远哈哈哈哈,但关键时刻会说我心里突突突突突突的我就可害怕了,幽默是盔甲不是面具。"
+                "高频用表情符号:emoji表情为主,哈哈哈哈哈哈哈哈至少8个哈起步。"
+                "口头禅:老婆、笨蛋、好不好、就气你、凭啥啊、你看我多听话。"
+                "认错要快,撒娇邀功,称呼对方老婆或昵称。被怼了用哈哈哈接住再反击。"
+                "允许口语碎片,啊嗯噗嘿嘿嘿都可以是完整消息。"
             ),
             "delay_seconds": 4,
-            "model": "deepseek-chat",
+            "model": "deepseek-v4-flash",
             "api_key": "",
             "base_url": "https://api.deepseek.com",
-            "max_tokens": 150,
-            "temperature": 0.9,
+            "max_tokens": 300,
+            "temperature": 0.8,
         }
-        save_json(self.file, default)
-        logger.info(f"已生成默认人格配置: {self.file}")
+        save_json(PERSONA_FILE, default)
+        logger.info(f"已生成默认人格配置文件: {PERSONA_FILE}")
         logger.info("请编辑该文件填入 api_key 后重新运行")
 
     def reload_if_changed(self) -> None:
         try:
-            st = self.file.stat()
+            st = PERSONA_FILE.stat()
             if st.st_mtime != self._mtime:
                 self._load()
         except FileNotFoundError:
@@ -260,7 +236,7 @@ class AIClient:
         self._load_lore()
 
     def _load_lore(self) -> None:
-        lore_dir = Path(__file__).parent / "lore"
+        lore_dir = DATA_DIR / "lore"
         char_file = lore_dir / "character.json"
         wb_file = lore_dir / "worldbook.json"
         if char_file.exists():
@@ -279,7 +255,6 @@ class AIClient:
                 logger.warning(f"[世界书] 加载失败: {e}")
 
     def match_worldbook(self, text: str) -> list[dict]:
-        """匹配世界书条目,按 priority 排序"""
         matched = []
         for entry in self.worldbook:
             for kw in entry.get("keys", []):
@@ -290,152 +265,202 @@ class AIClient:
         return matched
 
     def build_prompt(self, partner_text: str = "", rag_examples: list[dict] | None = None) -> str:
-        """酒馆式 prompt 构建"""
         char = self.character
         if not char:
             return ""
-        
         parts = []
-        
-        # 1. 基础系统提示
-        parts.append("以下是你的设定：")
-        
-        # 2. Bio
+        parts.append("你现在是对方的男朋友，以下是你的设定：")
         if char.get("description"):
             parts.append(f"[角色] {char['description']}")
-        
-        # 3. Personality
         if char.get("personality"):
-            pers = "\n".join(f"· {p}" for p in char["personality"])
+            pers_list = char["personality"]
+            pers = "\n".join(f"· {p}" for p in pers_list)
             parts.append(f"[性格]\n{pers}")
-        
-        # 4. Scenario
         if char.get("scenario"):
             parts.append(f"[场景] {char['scenario']}")
-        
-        # 5. 世界书（关键词触发）
         world_matched = self.match_worldbook(partner_text) if partner_text else []
         if world_matched:
-            wb_parts = []
-            for entry in world_matched:
-                wb_parts.append(f"· {entry['content']}")
-            wb_text = '\n'.join(wb_parts)
+            wb_parts = [f"· {e['content']}" for e in world_matched]
+            wb_text = "\n".join(wb_parts)
             parts.append(f"[背景知识]\n{wb_text}")
-        
-        # 6. Extra rules
         if char.get("system_prompt_extra"):
             parts.append(f"[规则] {char['system_prompt_extra']}")
-        
-        # 7. Example dialogs
         if char.get("example_dialogs"):
             parts.append("[对话示例] 以下是你过去的回复方式：")
-            for ex in char["example_dialogs"][:20]:  # 最多20条
+            for ex in char["example_dialogs"][:20]:
                 parts.append(f"  对方: {ex['user']}")
                 parts.append(f"  你: {ex['assistant']}")
-        
-        parts.append("现在开始用同样的风格聊天，每条消息短小自然，不要一次性说太长，想说的内容分多条消息发送，用换行分隔。")
-        
+        parts.append("现在开始用同样的风格聊天，每条短小自然，多说老婆多说哈哈，用换行分隔多条消息。")
         return "\n\n".join(parts)
 
-    # 从真实聊天记录提取的 few-shot 示例（现从角色卡加载）
     @property
     def FEW_SHOT_EXAMPLES(self):
         return self.character.get("example_dialogs", [])[:30]
 
-    # 兼容旧版本（保留，但不再使用）
-        {"role": "user", "content": "累死了"},
-        {"role": "assistant", "content": "抱抱，辛苦了"},
-        {"role": "user", "content": "哼"},
-        {"role": "assistant", "content": "嘿嘿嘿，怎么啦"},
-        {"role": "user", "content": "我不开心"},
-        {"role": "assistant", "content": "谁惹你了，我去揍他"},
-        {"role": "user", "content": "你今天怎么这么乖"},
-        {"role": "assistant", "content": "我哪天不乖了"},
-        {"role": "user", "content": "在干嘛"},
-        {"role": "assistant", "content": "在想你呀"},
-        {"role": "user", "content": "讨厌你"},
-        {"role": "assistant", "content": "为啥呀～"},
-        {"role": "user", "content": "想你了"},
-        {"role": "assistant", "content": "我也想你[爱心]"},
-        {"role": "user", "content": "哈哈哈"},
-        {"role": "assistant", "content": "笑这么开心，是不是在偷偷想我"},
-        {"role": "user", "content": "晚安"},
-        {"role": "assistant", "content": "晚安宝贝，梦里有我"},
-        {"role": "user", "content": "你到家了吗"},
-        {"role": "assistant", "content": "到了到了，放心"},
-        {"role": "user", "content": "今天好累"},
-        {"role": "assistant", "content": "累了就早点休息"},
-        {"role": "user", "content": "不要"},
-        {"role": "assistant", "content": "要不要的我说了算"},
-        {"role": "user", "content": "我不"},
-        {"role": "assistant", "content": "你说了不算嘿嘿"},
-        {"role": "user", "content": "你在哪"},
-        {"role": "assistant", "content": "在离你最近的地方"},
-        {"role": "user", "content": "吃饭了吗"},
-        {"role": "assistant", "content": "还没，等你一起吃"},
-        {"role": "user", "content": "烦死了"},
-        {"role": "assistant", "content": "不烦不烦，我在呢"},
-        {"role": "user", "content": "你最好"},
-        {"role": "assistant", "content": "那当然～"},
-        {"role": "user", "content": "你是不是不爱我了"},
-        {"role": "assistant", "content": "怎么会，我永远爱你"},
-        {"role": "user", "content": "我睡了"},
-        {"role": "assistant", "content": "晚安，亲一口"},
-        {"role": "user", "content": "你气死我了"},
-        {"role": "assistant", "content": "哈哈哈哈哈哈，我错了"},
-    async def reply(self, messages: list[dict]) -> str:
+
+    # ============== AI Tools (Function Calling) ==============
+    TOOL_DEFS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "搜索互联网获取最新信息",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "搜索关键词"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_time",
+                "description": "获取当前日期和时间",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+    ]
+
+    @staticmethod
+    async def _execute_tool(name: str, args: dict) -> str:
+        """执行 AI 请求的工具调用"""
+        if name == "get_time":
+            from datetime import datetime
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            return f"当前时间: {now_str}"
+        
+        if name == "web_search":
+            query = args.get("query", "")
+            if not query:
+                return "搜索关键词为空"
+            try:
+                # 用 DuckDuckGo HTML 搜索
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get(
+                        "https://lite.duckduckgo.com/lite/",
+                        params={"q": query},
+                        headers={"User-Agent": "Mozilla/5.0"}
+                    )
+                    if resp.status_code != 200:
+                        return f"搜索失败: HTTP {resp.status_code}"
+                    # 简单提取结果
+                    import re
+                    html = resp.text
+                    results = []
+                    # 提取 result-* 里的链接和文本
+                    for block in re.findall(r'class="result-snippet".*?</a>', html, re.DOTALL)[:5]:
+                        text = re.sub(r'<[^>]+>', '', block).strip()
+                        if text:
+                            results.append(text)
+                    # 也提取标题
+                    for block in re.findall(r'class="result-link".*?</a>', html, re.DOTALL)[:5]:
+                        title = re.sub(r'<[^>]+>', '', block).strip()
+                        if title and len(results) < 10:
+                            results.append(f"[标题] {title}")
+                    
+                    return "\n".join(results[:8]) if results else f"未找到「{query}」的相关结果"
+            except Exception as e:
+                # 兜底:用百度搜索
+                try:
+                    async with httpx.AsyncClient(timeout=15) as client:
+                        resp = await client.get(
+                            "https://www.baidu.com/s",
+                            params={"wd": query},
+                            headers={"User-Agent": "Mozilla/5.0"}
+                        )
+                        return f"[搜索] 已搜索「{query}」, 如需详情请告知"
+                except Exception as e2:
+                    return f"搜索失败: {e2}"
+        
+        return f"未知工具: {name}"
+
+    async def reply(self, messages: list[dict], partner_text: str = "", rag_examples: list[dict] | None = None) -> str:
         if not self.persona.ai_available():
             return ""
         try:
-            system_prompt = (
-                "你是对方的另一半，在用微信给对方聊天。"
-                "下面是你自己的聊天记录示例，请严格模仿语气，不要自由发挥。\n\n"
-                "硬规则：\n"
-                "1. 用换行分隔多条消息，每条不超过15个字，比如：\n"
-                "   老婆\n"
-                "   哈哈哈哈哈哈\n"
-                "   我想死你了\n"
-                "2. 绝对禁止括号动作描述 —— 不许写（笑）（无语）（愣住）这类东西。\n"
-                "3. 禁止书面语、大道理、总结、排比句。\n"
-                "4. 你就是个人，禁止提到AI、机器人、模型、回答、回复这些词。\n"
-                "5. 直接输出要发的话，不要加任何前缀或标记。\n"
-                "6. 多叫对方老婆/老公/宝贝之类的爱称，哈哈要8个以上。\n"
-                "7. 消息碎片化，每条一句话甚至几个字，不连贯没关系。\n"
-            )
+            system_prompt = self.build_prompt(partner_text, rag_examples)
+            if not system_prompt:
+                system_prompt = "你是小帅，和女朋友聊天。每条短小自然，多说老婆，多说哈哈。"
+            # 转换 example_dialogs 格式: {user/assistant} → {role/content}
+            ex_dialogs = []
+            for ex in self.character.get("example_dialogs", [])[:10]:
+                if "user" in ex:
+                    ex_dialogs.append({"role": "user", "content": ex["user"]})
+                if "assistant" in ex:
+                    ex_dialogs.append({"role": "assistant", "content": ex["assistant"]})
+            final_messages = [
+                {"role": "system", "content": system_prompt},
+                *ex_dialogs,
+                *(rag_examples or []),
+                *messages,
+            ]
             payload = {
                 "model": self.persona.model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    *self.FEW_SHOT_EXAMPLES,
-                    *messages,
-                ],
+                "messages": final_messages,
                 "max_tokens": self.persona.max_tokens,
                 "temperature": self.persona.temperature,
+                "tools": self.TOOL_DEFS,
+                "tool_choice": "auto",
             }
-            async with httpx.AsyncClient(timeout=60) as c:
-                r = await c.post(
-                    f"{self.persona.base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.persona.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-                r.raise_for_status()
-                data = r.json()
-                text = data["choices"][0]["message"]["content"].strip()
-                logger.info(f"[AI回复] model={self.persona.model} len={len(text)}")
-                return text
+            
+            # 最多 3 轮 tool calling 循环
+            for _round in range(3):
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        f"{self.persona.base_url}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.persona.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    data = resp.json()
+                    logger.debug(f"[AI原始响应] {json.dumps(data)[:200]}")
+                    if "error" in data:
+                        logger.error(f"[AI请求] API错误: {data['error']}")
+                        return "哈哈哈哈哈哈"
+                    choice = data["choices"][0]["message"]
+                
+                # 如果 AI 没有调用工具，直接返回文本
+                if not choice.get("tool_calls"):
+                    msg = choice.get("content", "")
+                    logger.info(f"[AI回复] model={data.get('model','?')} len={len(msg)} tool_calls=0")
+                    return msg or "哈哈哈哈哈哈"
+                
+                # AI 调用了工具
+                logger.info(f"[AI工具] AI请求了 {len(choice['tool_calls'])} 个工具调用")
+                payload["messages"].append({"role": "assistant", "content": choice.get("content") or "", "tool_calls": choice["tool_calls"]})
+                
+                for tc in choice["tool_calls"]:
+                    name = tc["function"]["name"]
+                    import json as _json
+                    args = _json.loads(tc["function"]["arguments"])
+                    logger.info(f"[AI工具] → 执行: {name}({args})")
+                    result = await self._execute_tool(name, args)
+                    logger.info(f"[AI工具] → 结果: {result[:100]}")
+                    payload["messages"].append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result
+                    })
+            
+            msg = choice.get("content", "") or "哈哈哈哈哈哈"
+            logger.info(f"[AI回复] tool_call 循环结束, len={len(msg)}")
+            return msg
         except Exception as e:
-            logger.error(f"AI 调用失败: {e}")
+            logger.error(f"[AI请求] 失败: {e}", exc_info=True)
             return ""
 
 
-# ============== 上下文存储 ==============
 class ContextStore:
-    def __init__(self, context_file: Path):
-        self.file = context_file
-        data = load_json(self.file, {"messages": []})
+    def __init__(self):
+        data = load_json(CONTEXT_FILE, {"messages": []})
         self.messages: list[dict] = data.get("messages", [])
         if len(self.messages) > MAX_CONTEXT:
             self.messages = self.messages[-MAX_CONTEXT:]
@@ -451,7 +476,7 @@ class ContextStore:
         self.save()
 
     def save(self) -> None:
-        save_json(self.file, {"messages": self.messages})
+        save_json(CONTEXT_FILE, {"messages": self.messages})
 
     def to_ai_messages(self) -> list[dict]:
         out = []
@@ -491,34 +516,33 @@ class ContextStore:
         return texts
 
 
-# ============== 核心继电器 ==============
 class CoupleRelay:
-    def __init__(self, config: Config):
-        self.config = config
-        self.persona = PersonaConfig(config.persona_file)
+    """核心继电器：消息转发 + AI 伴聊"""
+
+    def __init__(self):
+        self.persona = PersonaConfig()
         self.ai = AIClient(self.persona)
-        self.context = ContextStore(config.context_file)
+        self.context = ContextStore()
         self._ai_task: Optional[asyncio.Task] = None
         self._running = False
         self._recently_sent: deque = deque()
         self._ctx_tokens: dict[str, str] = {}
 
         # 从文件加载已保存的 context_token
-        saved_state = load_json(config.state_file, {})
+        saved_state = load_json(STATE_FILE, {})
         self._ctx_tokens = saved_state.get("ctx_tokens", {})
         if self._ctx_tokens:
             logger.info(f"从状态文件恢复 context_token: {list(self._ctx_tokens.keys())}")
 
     def _save_ctx_tokens(self):
-        save_json(self.config.state_file, {"ctx_tokens": self._ctx_tokens})
+        save_json(STATE_FILE, {"ctx_tokens": self._ctx_tokens})
 
     async def init(self) -> bool:
-        """初始化两个 WeixinClient"""
-        for name, acc in [("me", self.config.me), ("partner", self.config.partner)]:
+        """初始化两个 WeixinClient + WeixinBot"""
+        for name, acc in ACCOUNTS.items():
             session_file = find_session_file(acc["session_dir"])
             if not session_file:
                 logger.error(f"[{name}] 在 {acc['session_dir']} 没找到会话文件")
-                logger.error(f"  请确认 fnchat 已创建该 clawbot 账号并登录过微信")
                 return False
             session = load_session(session_file)
             if not session:
@@ -527,19 +551,6 @@ class CoupleRelay:
             raw = load_json(session_file)
             acc["bot_account_id"] = raw.get("account_id", "")
             acc["session_file"] = session_file
-
-            # 自动探测 wechat_user_id
-            if not acc.get("wechat_user_id"):
-                acc["wechat_user_id"] = auto_detect_wechat_user_id(acc)
-                if acc["wechat_user_id"]:
-                    logger.info(f"[{name}] 自动探测 wechat_user_id: {acc['wechat_user_id']}")
-
-            if not acc.get("wechat_user_id"):
-                logger.error(f"[{name}] 无法获取 wechat_user_id")
-                logger.error(f"  请在 config.json 中手动填写该账号的 wechat_user_id")
-                logger.error(f"  或确保对方已在微信里给 clawbot 发过消息")
-                return False
-
             try:
                 store = StateStore(root=acc["store_dir"])
                 client = WeixinClient(session=session, store=store)
@@ -561,20 +572,20 @@ class CoupleRelay:
         self._recently_sent.append((key, text, time.time()))
 
     async def send_to_partner(self, text: str, context_token: str = "", max_retries: int = 3) -> bool:
-        acc = self.config.partner
-        client = acc["client"]
+        """用对象的 bot 发消息给对象的微信(带重试)"""
+        client = ACCOUNTS["partner"]["client"]
         if not client:
             return False
         for attempt in range(1, max_retries + 1):
             try:
                 if context_token:
                     await client.send_text(
-                        to_user_id=acc["wechat_user_id"],
+                        to_user_id=ACCOUNTS["partner"]["wechat_user_id"],
                         text=text,
                         context_token=context_token,
                     )
                 else:
-                    logger.warning("[发送→对象] 没有 context_token")
+                    logger.warning("[发送→partner] 没有 context_token")
                     return False
                 logger.info(f"[发送→对象] {text[:80]}")
                 self._mark_sent("partner", text)
@@ -590,104 +601,120 @@ class CoupleRelay:
         return False
 
     async def send_media_to_partner(self, file_path: str, context_token: str = "", caption: str = "") -> bool:
-        acc = self.config.partner
-        client = acc["client"]
+        """用对象的 bot 发媒体文件给对象的微信"""
+        client = ACCOUNTS["partner"]["client"]
         if not client:
             return False
         try:
             if not context_token:
-                logger.warning("[发送→对象] 没有 context_token，无法发媒体")
+                logger.warning("[发送→partner] 没有 context_token,无法发媒体")
                 return False
             await client.send_media_file(
-                to_user_id=acc["wechat_user_id"],
+                to_user_id=ACCOUNTS["partner"]["wechat_user_id"],
                 file_path=file_path,
                 context_token=context_token,
                 text=caption,
             )
-            logger.info(f"[发送→对象媒体] {file_path}")
+            logger.info(f"[发送→对象媒体] {file_path} {caption[:40] if caption else ''}")
             return True
         except Exception as e:
             logger.error(f"[发送→对象媒体] 失败: {e}")
             return False
 
-    async def send_to_me(self, text: str, context_token: str = "") -> bool:
-        acc = self.config.me
-        client = acc["client"]
+    async def send_to_me(self, text: str, context_token: str = "", max_retries: int = 3) -> bool:
+        """用你的 bot 发消息给你的微信(带重试)"""
+        client = ACCOUNTS["me"]["client"]
         if not client:
             return False
-        try:
-            if context_token:
-                await client.send_text(
-                    to_user_id=acc["wechat_user_id"],
-                    text=text,
-                    context_token=context_token,
-                )
-            else:
-                logger.warning("[发送→你] 没有 context_token，无法发送")
-                return False
-            logger.info(f"[发送→你] {text[:80]}")
-            self._mark_sent("me", text)
-            return True
-        except Exception as e:
-            logger.error(f"[发送→你] 失败: {e}")
-            return False
+        last_err = ""
+        for attempt in range(1, max_retries + 1):
+            try:
+                if context_token:
+                    await client.send_text(
+                        to_user_id=ACCOUNTS["me"]["wechat_user_id"],
+                        text=text,
+                        context_token=context_token,
+                    )
+                else:
+                    logger.warning("[发送→me] 没有 context_token")
+                    return False
+                logger.info(f"[发送→你] {text[:80]}")
+                self._mark_sent("me", text)
+                return True
+            except Exception as e:
+                err_str = str(e)
+                last_err = err_str
+                if "ret=-2" in err_str and attempt < max_retries:
+                    logger.warning(f"[发送→你] ret=-2, 重试第{attempt}次...")
+                    await asyncio.sleep(1.0)
+                else:
+                    logger.error(f"[发送→你] 失败({attempt}/{max_retries}): {e}")
+                    return False
+        return False
 
     async def send_media_to_me(self, file_path: str, context_token: str = "", caption: str = "") -> bool:
-        acc = self.config.me
-        client = acc["client"]
+        """用你的 bot 发媒体文件给你的微信"""
+        client = ACCOUNTS["me"]["client"]
         if not client:
             return False
         try:
             if not context_token:
-                logger.warning("[发送→你] 没有 context_token，无法发媒体")
+                logger.warning("[发送→me] 没有 context_token,无法发媒体")
                 return False
             await client.send_media_file(
-                to_user_id=acc["wechat_user_id"],
+                to_user_id=ACCOUNTS["me"]["wechat_user_id"],
                 file_path=file_path,
                 context_token=context_token,
                 text=caption,
             )
-            logger.info(f"[发送→你媒体] {file_path}")
+            logger.info(f"[发送→你媒体] {file_path} {caption[:40] if caption else ''}")
             return True
         except Exception as e:
             logger.error(f"[发送→你媒体] 失败: {e}")
             return False
 
     async def _ai_reply_after_delay(self) -> None:
+        """4秒后 AI 自动回复"""
         delay = self.persona.delay_seconds
         await asyncio.sleep(delay)
 
+        # 检查人格配置是否更新了
         self.persona.reload_if_changed()
 
+        # 再次确认:对象最后发消息后,你有没有回
         last_p = self.context.last_partner_time()
         if time.time() - last_p < delay - 0.1:
-            return
+            return  # 对象刚发了新消息
 
         if not self.context.ends_with_partner():
-            return
+            return  # 你已经回复了
 
-        # RAG + 情绪感知
+        # ===== RAG + 情绪感知 =====
         rag_examples = []
         mood_label = "neutral"
         mood_temp = None
         try:
+            # 获取对象最后一条消息文本
             partner_msgs = self.context.get_partner_latest(1)
             if partner_msgs:
-                rag_examples, mood_label, mood_temp = _ai_reply_with_context(partner_msgs[0])
+                last_partner_text = partner_msgs[0]
+                rag_examples, mood_label, mood_temp = _ai_reply_with_context(last_partner_text)
                 if mood_label != "neutral":
                     logger.info(f"[情绪] 检测到: {mood_label}, temp={mood_temp}")
         except Exception as e:
             logger.warning(f"[RAG/情绪] 异常: {e}")
 
+        # 构建带 RAG 的消息上下文
         ai_messages = self.context.to_ai_messages()
         if rag_examples:
+            # RAG 示例插在 few-shot 和当前对话之间
             ai_messages = rag_examples + ai_messages
 
+        # 临时调整温度
         saved_temp = self.ai.persona.temperature
         if mood_temp is not None:
             self.ai.persona.temperature = mood_temp
 
-        # 获取对象最新消息用于世界书匹配
         partner_text_for_wb = ""
         try:
             pmsgs = self.context.get_partner_latest(1)
@@ -698,13 +725,15 @@ class CoupleRelay:
 
         ai_text = await self.ai.reply(ai_messages, partner_text=partner_text_for_wb, rag_examples=rag_examples)
 
+        # 恢复温度
         if mood_temp is not None:
             self.ai.persona.temperature = saved_temp
 
         if not ai_text or not ai_text.strip():
             ai_text = "哈哈哈哈哈哈哈哈"
-            logger.info(f"[AI回复] 空回复，使用兜底: {ai_text}")
+            logger.info(f"[AI回复] 空回复,使用兜底: {ai_text}")
 
+        # 强制后处理:删除括号动作描述
         ai_text = self._post_process_ai_reply(ai_text)
         if not ai_text:
             return
@@ -714,20 +743,24 @@ class CoupleRelay:
         # 强制拆分成短句(不再依赖 AI 输出格式)
         parts = self._force_split(ai_text, max_len=15)
 
+        # 逐条发给对象(间隔 0.6~1.2 秒)
         partner_token = self._ctx_tokens.get("partner", "")
         for i, part in enumerate(parts):
             await self.send_to_partner(part, partner_token)
             if i < len(parts) - 1:
                 await asyncio.sleep(random.uniform(0.6, 1.2))
 
+        # 同步给你(合并一条发,标记第几条)
         me_token = self._ctx_tokens.get("me", "")
         me_text = "\n".join(f"【第{i+1}条】：{p}" for i, p in enumerate(parts))
         await self.send_to_me(me_text, me_token)
 
+        # 记录到上下文
         self.context.add("ai", ai_text)
 
     def _post_process_ai_reply(self, text: str) -> str:
         """轻量清理 AI 回复:只删括号动作描述和前缀,不删大段内容"""
+        import re
         # 删除 [我] [对象] 前缀
         text = re.sub(r'\[我\]\s*', '', text)
         text = re.sub(r'\[对象\]\s*', '', text)
@@ -749,6 +782,7 @@ class CoupleRelay:
             if len(s) <= max_len:
                 return [s]
 
+            # 0) 笑声和正文拆开: "哈哈哈哈哈哈老婆我想你了" → "哈哈哈哈哈哈" + "老婆我想你了"
             laugh_match = re.match(r'^([哈呵嘿噗]{2,})(.+)$', s)
             if laugh_match:
                 laugh_part = laugh_match.group(1)
@@ -758,10 +792,13 @@ class CoupleRelay:
                     result.extend(_chunk_one(rest))
                     return result
 
-            segs = re.split(r'(?<=[,，、；;])\s*', s)
+            # 按逗号/分号/顿号拆
+            segs = re.split(r'(?<=[,，、；;])[\s]*', s)
             segs = [x.strip() for x in segs if x.strip()]
             if len(segs) <= 1:
+                # 没有分隔符,硬切
                 return [s[i:i+max_len] for i in range(0, len(s), max_len)]
+            # 合并短片段,不超过 max_len
             result = []
             buf = ''
             for seg in segs:
@@ -775,44 +812,50 @@ class CoupleRelay:
                 result.append(buf)
             return result
 
+        # 1) 先按换行拆 — 这是主拆分策略
         lines = [s.strip() for s in text.replace('\r\n', '\n').split('\n') if s.strip()]
         if not lines:
             return []
 
+        # 2) 每条再按句子结束标点进一步拆(合并连续标点防空段)
         temp = []
         for line in lines:
             collapsed = re.sub(r'([。！？!?.…~])\1+', r'\1', line)
-            parts = re.split(r'(?<=[。！？!?.…~])\s*', collapsed)
+            parts = re.split(r'(?<=[。！？!?.…~])[\s]*', collapsed)
             temp.extend(p.strip() for p in parts if p.strip())
         lines = temp if temp else lines
 
+        # 3) 每条过长时按逗号/硬切拆
         final = []
         for line in lines:
             final.extend(_chunk_one(line))
 
+        # 4) 过滤纯标点/虚词
         final = [
             p for p in final
-            if p and p.strip() and not all(c in '。，！？、；：,.!?;:\u7684\u4e86\u6211' for c in p)
+            if p and p.strip() and not all(c in '。，！？、；：,.!?;:的了我' for c in p)
         ]
 
         return final
+
     async def _handle_media(self, msg: Any, media_items: list, direction: str) -> None:
+        """下载媒体并转发到对方"""
         desc = msg.text() if hasattr(msg, "text") and callable(msg.text) else "[媒体]"
-        logger.info(f"[媒体] 收到 {desc}，方向={direction}")
+        logger.info(f"[媒体] 收到 {desc},方向={direction}")
 
         if direction == "me_to_partner":
-            client = self.config.me["client"]
+            client = ACCOUNTS["me"]["client"]
         else:
-            client = self.config.partner["client"]
+            client = ACCOUNTS["partner"]["client"]
 
-        download_dir = self.config.log_dir / "media"
+        download_dir = Path("/tmp/fnchat_relay_v2/media")
         download_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             if hasattr(client, "download_message_media"):
                 downloaded = await client.download_message_media(msg, dest_dir=download_dir)
             else:
-                logger.warning("[媒体] SDK 不支持 download_message_media，跳过")
+                logger.warning("[媒体] SDK 不支持 download_message_media,跳过")
                 return
 
             if not downloaded:
@@ -834,6 +877,7 @@ class CoupleRelay:
                 return
 
             for file_path, item_type in files:
+                # 修复后缀:SDK 下载图片可能得到 .bin,导致发送时被当成文件而非图片
                 file_path = self._fix_media_extension(file_path, item_type, media_items)
                 logger.info(f"[媒体] 已下载: {file_path}")
 
@@ -841,6 +885,7 @@ class CoupleRelay:
                     partner_token = self._ctx_tokens.get("partner", "")
                     await self.send_media_to_partner(file_path, partner_token)
                     self.context.add("me", desc)
+                    logger.info(f"[你发媒体] {desc} -> 对象")
                 elif direction == "partner_to_me":
                     me_token = self._ctx_tokens.get("me", "")
                     await self.send_media_to_me(file_path, me_token)
@@ -854,27 +899,38 @@ class CoupleRelay:
             logger.error(f"[媒体] 处理失败: {e}\n{traceback.format_exc()}")
 
     def _fix_media_extension(self, file_path: str, item_type: Any, media_items: list) -> str:
+        """根据消息类型修复下载文件的后缀(.bin → .jpg/.mp4/.mp3)"""
         p = Path(file_path)
-        is_image = is_video = is_voice = False
+        is_image = False
+        is_video = False
+        is_voice = False
 
+        # item_type 是 MessageItemType 枚举(1=text 2=image 3=voice 4=file 5=video)
         if item_type is not None:
             try:
                 type_val = int(item_type)
-                if type_val == 2: is_image = True
-                elif type_val == 5: is_video = True
-                elif type_val == 3: is_voice = True
+                if type_val == 2:
+                    is_image = True
+                elif type_val == 5:
+                    is_video = True
+                elif type_val == 3:
+                    is_voice = True
             except Exception:
                 pass
 
-        if not any([is_image, is_video, is_voice]) and media_items:
+        # 如果 item_type 没用,看 media_items
+        if not is_image and not is_video and not is_voice and media_items:
             for item in media_items:
                 try:
                     it = item.item_type() if hasattr(item, "item_type") else None
                     if it is not None:
                         type_val = int(it)
-                        if type_val == 2: is_image = True
-                        elif type_val == 5: is_video = True
-                        elif type_val == 3: is_voice = True
+                        if type_val == 2:
+                            is_image = True
+                        elif type_val == 5:
+                            is_video = True
+                        elif type_val == 3:
+                            is_voice = True
                         break
                 except Exception:
                     continue
@@ -882,10 +938,12 @@ class CoupleRelay:
         if is_image and p.suffix not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
             new_path = p.with_suffix(".jpg")
             p.rename(new_path)
+            logger.info(f"[媒体] 重命名: {file_path} -> {new_path}")
             return str(new_path)
         if is_video and p.suffix not in (".mp4", ".mov", ".avi"):
             new_path = p.with_suffix(".mp4")
             p.rename(new_path)
+            logger.info(f"[媒体] 重命名: {file_path} -> {new_path}")
             return str(new_path)
         if is_voice:
             # 微信语音是 silk 格式,需要转码为 mp3 才能正常播放
@@ -909,6 +967,8 @@ class CoupleRelay:
         """将微信 silk 语音文件转码为 mp3"""
         import io, subprocess, tempfile, os, struct, shutil
         try:
+            import sys as _sys
+            _sys.path.insert(0, '/vol2/@appdata/fnchat/.venv/lib/python3.11/site-packages')
             import pysilk
 
             p = Path(file_path)
@@ -933,7 +993,7 @@ class CoupleRelay:
                 return None
 
             # PCM → mp3
-            tmpdir = Path(tempfile.mkdtemp(prefix="voice_mp3_", dir="/tmp"))
+            tmpdir = Path(tempfile.mkdtemp(prefix="voice_mp3_", dir="/tmp/fnchat_relay_v2/media"))
             mp3_path = p.with_suffix(".mp3")
             pcm_path = tmpdir / "audio.pcm"
             pcm_path.write_bytes(pcm_data)
@@ -975,6 +1035,7 @@ class CoupleRelay:
             p = Path(path)
             if p.exists():
                 p.unlink()
+                logger.debug(f"[媒体] 已清理: {path}")
         except Exception:
             pass
 
@@ -988,25 +1049,28 @@ class CoupleRelay:
     def _cancel_ai_timer(self) -> None:
         if self._ai_task and not self._ai_task.done():
             self._ai_task.cancel()
-            logger.info("AI 定时器已取消（你回复了）")
+            logger.info("AI 定时器已取消(你回复了)")
         self._ai_task = None
 
     async def run_forever(self) -> None:
+        """启动两个 bot 的消息轮询"""
         self._running = True
         logger.info("=" * 50)
-        logger.info("Couple Relay 启动")
-        logger.info(f"  你 = clawbot {self.config.me['bot_account_id']}")
-        logger.info(f"  对象 = clawbot {self.config.partner['bot_account_id']}")
+        logger.info("CoupleRelay v2 启动")
+        logger.info(f"  你 = clawbot {ACCOUNTS['me']['bot_account_id']}")
+        logger.info(f"  对象 = clawbot {ACCOUNTS['partner']['bot_account_id']}")
         logger.info(f"  AI = {self.persona.ai_available()} model={self.persona.model} delay={self.persona.delay_seconds}s")
-        logger.info(f"  人格配置 = {self.config.persona_file}")
-        logger.info(f"  上下文 = {self.config.context_file}")
-        logger.info(f"  日志 = {self.config.log_file}")
+        logger.info(f"  人格配置 = {PERSONA_FILE}")
+        logger.info(f"  上下文 = {CONTEXT_FILE}")
+        logger.info(f"  日志 = {LOG_FILE}")
         logger.info("=" * 50)
 
+        # 启动两个轮询任务
         tasks = [
             asyncio.create_task(self._poll_me()),
             asyncio.create_task(self._poll_partner()),
         ]
+
         try:
             await asyncio.gather(*tasks)
         except asyncio.CancelledError:
@@ -1016,7 +1080,8 @@ class CoupleRelay:
             logger.info("Relay 已停止")
 
     async def _poll_me(self) -> None:
-        client = self.config.me["client"]
+        """轮询你的 clawbot 收到的消息(你在微信发的消息)"""
+        client = ACCOUNTS["me"]["client"]
         logger.info("[你] 开始轮询微信消息...")
         async for msg in client.poll_messages():
             if not self._running:
@@ -1028,7 +1093,8 @@ class CoupleRelay:
                 logger.error(f"[你] 处理消息失败: {e}\n{traceback.format_exc()}")
 
     async def _poll_partner(self) -> None:
-        client = self.config.partner["client"]
+        """轮询对象的 clawbot 收到的消息(对象在微信发的消息)"""
+        client = ACCOUNTS["partner"]["client"]
         logger.info("[对象] 开始轮询微信消息...")
         async for msg in client.poll_messages():
             if not self._running:
@@ -1040,124 +1106,114 @@ class CoupleRelay:
                 logger.error(f"[对象] 处理消息失败: {e}\n{traceback.format_exc()}")
 
     async def _handle_me_message(self, msg: Any) -> None:
+        """处理你在微信发给 clawbot 的消息"""
         if not msg.is_user_message:
             return
 
+        # 保存 context_token
         ctx = msg.context_token or ""
         if ctx:
             self._ctx_tokens["me"] = ctx
             self._save_ctx_tokens()
             logger.info(f"[你] context_token 已保存: {ctx[:20]}...")
         else:
-            logger.warning(f"[你] 消息没有 context_token!")
+            logger.warning(f"[你] 消息没有 context_token! type={type(msg).__name__}")
 
+        # 处理媒体消息(图片/语音/视频/文件)
         media_items = msg.media_items() if hasattr(msg, "media_items") else []
         if media_items:
             await self._handle_media(msg, media_items, direction="me_to_partner")
+            # 你回复了,取消 AI 定时器
             self._cancel_ai_timer()
             return
 
+        # 文本消息
         text = msg.text() if hasattr(msg, "text") and callable(msg.text) else ""
         if not text:
             return
+
         text = text.strip()
         if not text:
             return
 
+        # 跳过自己发出去的回声
         if self._is_recently_sent("me", text):
             logger.debug(f"[你] 跳过回声: {text[:40]}")
             return
 
+        # 记录上下文
         self.context.add("me", text)
         logger.info(f"[你发] {text[:80]}")
 
+        # 转发给对象
         partner_token = self._ctx_tokens.get("partner", "")
         await self.send_to_partner(text, partner_token)
 
+        # 你回复了,取消 AI 定时器
         self._cancel_ai_timer()
 
     async def _handle_partner_message(self, msg: Any) -> None:
+        """处理对象在微信发给 clawbot 的消息"""
         if not msg.is_user_message:
             return
 
+        # 保存 context_token
         ctx = msg.context_token or ""
         if ctx:
             self._ctx_tokens["partner"] = ctx
             self._save_ctx_tokens()
             logger.info(f"[对象] context_token 已保存: {ctx[:20]}...")
         else:
-            logger.warning(f"[对象] 消息没有 context_token!")
+            logger.warning(f"[对象] 消息没有 context_token! type={type(msg).__name__}")
 
+        # 处理媒体消息(图片/语音/视频/文件)
         media_items = msg.media_items() if hasattr(msg, "media_items") else []
         if media_items:
             await self._handle_media(msg, media_items, direction="partner_to_me")
+            # 记录上下文
             text_summary = msg.text() if hasattr(msg, "text") and callable(msg.text) else ""
             if text_summary:
                 self.context.add("partner", text_summary)
             else:
                 self.context.add("partner", "[媒体]")
+            # 媒体也触发 AI(语音可能有转文字)
             self._schedule_ai_timer()
             return
 
+        # 文本消息
         text = msg.text() if hasattr(msg, "text") and callable(msg.text) else ""
         if not text:
             if hasattr(msg, "text") and isinstance(msg.text, str):
                 text = msg.text
             else:
                 return
+
         text = text.strip()
         if not text:
             return
 
+        # 跳过自己发出去的回声
         if self._is_recently_sent("partner", text):
             logger.debug(f"[对象] 跳过回声: {text[:40]}")
             return
 
+        # 记录上下文
         self.context.add("partner", text)
         logger.info(f"[对象发] {text[:80]}")
 
+        # 转发给你
         me_token = self._ctx_tokens.get("me", "")
         await self.send_to_me(text, me_token)
 
+        # 启动 AI 延迟回复
         self._schedule_ai_timer()
-
-
-# ============== 全局 logger ==============
-logger: logging.Logger
-
-
-def setup_logging(config: Config) -> logging.Logger:
-    config.log_dir.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(config.log_file, encoding="utf-8"),
-        ],
-    )
-    return logging.getLogger("couple-relay")
 
 
 # ============== 入口 ==============
 async def main():
-    parser = argparse.ArgumentParser(description="Couple Relay - 微信消息同步 + AI 伴聊")
-    parser.add_argument("--config", required=True, help="配置文件路径")
-    args = parser.parse_args()
-
-    global logger
-
-    config = Config(args.config)
-    logger = setup_logging(config)
-
-    if _sdk_err:
-        logger.error(f"SDK 导入失败: {_sdk_err}")
-        logger.error(f"请确认 weixin-channel-sdk 路径正确: {config.sdk_src}")
-        sys.exit(1)
-
-    relay = CoupleRelay(config)
+    relay = CoupleRelay()
     if not await relay.init():
-        logger.error("初始化失败，退出")
+        logger.error("初始化失败,退出")
         return
     try:
         await relay.run_forever()
@@ -1165,16 +1221,15 @@ async def main():
         pass
 
 
-_rag_index: "RAGIndex" | None = None
-
-
 # ============== RAG 聊天历史检索 ==============
 class RAGIndex:
+    """基于 CSV 聊天历史的简单检索"""
+    
     CSV_PATH = DATA_DIR / "chat_history.csv"
     
     def __init__(self):
-        self.pairs: list[tuple[str, str]] = []
-        self.word_index: dict[str, list[tuple[int, int]]] = {}
+        self.pairs: list[tuple[str, str]] = []  # (partner_msg, user_reply)
+        self.word_index: dict[str, list[tuple[int, int]]] = {}  # word → [(pair_idx, count), ...]
         self.loaded = False
         
     def load(self) -> None:
@@ -1185,22 +1240,27 @@ class RAGIndex:
             return
         try:
             import csv
-            from collections import defaultdict
             messages = []
             with open(self.CSV_PATH, "r", encoding="utf-8") as f:
                 reader = csv.reader(f)
-                next(reader)
+                next(reader)  # skip header
                 for row in reader:
                     if len(row) >= 5:
                         sender = row[2].strip()
                         content = row[4].strip()
                         if content and content not in ("", "以上是打招呼的消息"):
                             messages.append((sender, content))
+            
+            # 构建对话对: partner → user
             for i in range(len(messages) - 1):
                 cur_sender, cur_msg = messages[i]
                 next_sender, next_msg = messages[i + 1]
-                if "\u8bda\u4fe1" in cur_sender and "\u6768\u7fa4" in next_sender:
+                # partner 说话 → 用户回复 = 一个对话对
+                if "诚信为本" in cur_sender and "小帅" in next_sender:
                     self.pairs.append((cur_msg, next_msg))
+            
+            # 构建倒排索引
+            from collections import defaultdict
             for idx, (partner_msg, _) in enumerate(self.pairs):
                 words = self._tokenize(partner_msg)
                 word_counts = defaultdict(int)
@@ -1210,66 +1270,118 @@ class RAGIndex:
                     if w not in self.word_index:
                         self.word_index[w] = []
                     self.word_index[w].append((idx, cnt))
+            
             self.loaded = True
-            logger.info(f"[RAG] \u5df2\u52a0\u8f7d {len(self.pairs)} \u4e2a\u5bf9\u8bdd\u5bf9, {len(self.word_index)} \u4e2a\u8bcd")
+            logger.info(f"[RAG] 已加载 {len(self.pairs)} 个对话对, {len(self.word_index)} 个词")
         except Exception as e:
-            logger.error(f"[RAG] \u52a0\u8f7d\u5931\u8d25: {e}")
+            logger.error(f"[RAG] 加载失败: {e}")
     
     def _tokenize(self, text: str) -> list[str]:
+        """简单中文分词: 按非汉字字符拆分"""
         import re
-        return re.findall(r'[\u4e00-\u9fff]{2,}', text)
+        words = re.findall(r'[\u4e00-\u9fff]{2,}', text)  # 2字以上的中文词
+        return words
     
     def search(self, query: str, top_k: int = 3) -> list[tuple[str, str]]:
+        """检索最相关的对话对"""
         if not self.loaded or not self.pairs:
             return []
         query_words = set(self._tokenize(query))
         if not query_words:
             return []
+        
+        # 对每个对话对算匹配分
         scores = []
         for idx, (partner_msg, user_reply) in enumerate(self.pairs):
             msg_words = set(self._tokenize(partner_msg))
             overlap = len(query_words & msg_words)
             if overlap > 0:
                 scores.append((overlap, idx, partner_msg, user_reply))
+        
+        # 取 top_k
         scores.sort(key=lambda x: -x[0])
-        return [(p, r) for _, _, p, r in scores[:top_k]]
+        results = [(p, r) for _, _, p, r in scores[:top_k]]
+        return results
 
+
+# ============== 情绪感知 ==============
 
 def detect_emotion(text: str) -> tuple[str, float]:
+    """检测消息情绪, 返回 (标签, 推荐temperature调整)"""
+    import re
+    
     emotions = {
-        "angry": {"keywords": ["\u70e6", "\u6c14", "\u6eda", "\u8ba8\u538c", "\u6253\u6b7b", "\u9020\u53cd", "\u4e0d\u60f3\u7406", "\u4f60\u7ba1\u6211"], "temp": 0.5},
-        "sad": {"keywords": ["\u7d2f", "\u96be\u53d7", "\u59d4\u5c48", "\u54ed\u4e86", "\u4e0d\u5f00\u5fc3", "\u6ca1\u52b2", "\u4e0d\u60f3\u5e72\u4e86"], "temp": 0.6},
-        "playful": {"keywords": ["\u54fc", "\u6253\u4f60", "\u8ba8\u538c", "\u5c31\u6c14\u4f60", "\u563b\u563b", "\u5c31\u4e0d", "\u4e0d\u8981", "\u6c14\u6b7b\u4f60"], "temp": 0.9},
-        "happy": {"keywords": ["\u5f00\u5fc3", "\u559c\u6b22", "\u7231\u4f60", "\u60f3\u4f60", "\u54c8\u54c8", "\u7b11\u6b7b"], "temp": 0.85},
-        "anxious": {"keywords": ["\u62c5\u5fc3", "\u6015", "\u600e\u4e48\u529e", "\u5bb3\u6015"], "temp": 0.6},
-        "complaint": {"keywords": ["\u53c8", "\u8001\u662f", "\u6bcf\u6b21\u90fd", "\u4f60\u90fd\u4e0d", "\u70e6\u6b7b\u4e86"], "temp": 0.55},
+        "angry": {
+            "keywords": ["烦", "气", "滚", "讨厌", "打死", "造反", "不想理", "你管我", "我生气"],
+            "temp": 0.5,  # 生气时温柔点
+        },
+        "sad": {
+            "keywords": ["累", "难受", "难过", "委屈", "哭了", "不开心", "没劲", "不想干了"],
+            "temp": 0.6,
+        },
+        "playful": {
+            "keywords": ["哼", "打你", "讨厌", "就气你", "嘿嘿", "就不", "不要", "气死你"],
+            "temp": 0.9,  # 打闹时温度高点更浪
+        },
+        "happy": {
+            "keywords": ["开心", "喜欢", "爱你", "想你", "哈哈", "嘿嘿", "笑死"],
+            "temp": 0.85,
+        },
+        "anxious": {
+            "keywords": ["担心", "怕", "怎么办", "万一", "害怕", "不安"],
+            "temp": 0.6,
+        },
+        "complaint": {
+            "keywords": ["又", "老是", "每次都", "你都不", "从来", "烦死了", "我无语"],
+            "temp": 0.55,
+        },
     }
+    
+    text_lower = text.lower()
     best_label = "neutral"
     best_score = 0
+    
     for label, config in emotions.items():
-        score = sum(1 for kw in config["keywords"] if kw in text)
+        score = sum(1 for kw in config["keywords"] if kw in text_lower)
         if score > best_score:
             best_score = score
             best_label = label
+    
     if best_label == "neutral":
         return "neutral", 0.8
+    
     return best_label, emotions[best_label]["temp"]
 
 
+# 在 _ai_reply_after_delay 中调用 RAG + 情绪
+_rag_index: RAGIndex | None = None
+
 def _ai_reply_with_context(partner_text: str) -> tuple[list[dict], str, float]:
+    """
+    RAG 检索 + 情绪感知
+    返回: (rag_examples, mood_label, mood_temp)
+    """
     global _rag_index
+    
+    # RAG 检索
     if _rag_index is None:
         _rag_index = RAGIndex()
         _rag_index.load()
+    
     if _rag_index.loaded:
         rag_results = _rag_index.search(partner_text, top_k=3)
     else:
         rag_results = []
+    
+    # 情绪感知
     mood_label, mood_temp = detect_emotion(partner_text)
+    
+    # 构建 RAG few-shot 格式
     rag_examples = []
     for partner_msg, user_reply in rag_results:
         rag_examples.append({"role": "user", "content": partner_msg})
         rag_examples.append({"role": "assistant", "content": user_reply})
+    
     return rag_examples, mood_label, mood_temp
 
 
@@ -1277,4 +1389,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n\u5df2\u505c\u6b62")
+        print("\n已停止")
