@@ -537,20 +537,68 @@ class CoupleRelay:
         self._ai_task: Optional[asyncio.Task] = None
         self._running = False
         self._recently_sent: deque = deque()
-        self._ctx_tokens: dict[str, str] = {}
+        self._ctx_tokens: dict[str, dict[str, Any]] = {}
+        self._outbox: list[dict] = []
         self._image_desc_for_ai: str = ""  # GLM-4V 图片描述,供 AI 回复使用
 
-        # 从文件加载已保存的 context_token
+        # 从文件加载已保存的状态
         saved_state = load_json(STATE_FILE, {})
         self._ctx_tokens = saved_state.get("ctx_tokens", {})
+        self._outbox = saved_state.get("outbox", [])
         if self._ctx_tokens:
             logger.info(f"从状态文件恢复 context_token: {list(self._ctx_tokens.keys())}")
+        if self._outbox:
+            logger.info(f"从状态文件恢复待发送队列: {len(self._outbox)} 条")
 
-    def _save_ctx_tokens(self):
-        save_json(STATE_FILE, {"ctx_tokens": self._ctx_tokens})
+    def _save_state(self):
+        save_json(STATE_FILE, {"ctx_tokens": self._ctx_tokens, "outbox": self._outbox})
+
+    def _token_for(self, direction: str) -> str:
+        info = self._ctx_tokens.get(direction)
+        if not info:
+            return ""
+        # 兼容旧版 state.json 里直接存字符串的 token
+        if isinstance(info, str):
+            return info
+        return info.get("token", "")
+
+    def _migrate_tokens(self) -> None:
+        """把旧版字符串 token 迁移为新版 dict 格式"""
+        changed = False
+        for direction in ("me", "partner"):
+            info = self._ctx_tokens.get(direction)
+            if isinstance(info, str):
+                self._ctx_tokens[direction] = {"token": info, "ts": 0.0}
+                changed = True
+        if changed:
+            self._save_state()
+            logger.info("[状态] 已迁移旧版 token 格式")
+
+    def _set_token(self, direction: str, token: str) -> None:
+        self._ctx_tokens[direction] = {"token": token, "ts": time.time()}
+        self._save_state()
+
+    def _ensure_outbox_shape(self) -> None:
+        """保证 outbox 条目字段完整"""
+        valid_keys = {"direction", "kind", "text", "media_path", "caption", "created_at", "next_try", "attempts"}
+        cleaned = []
+        for item in self._outbox:
+            if not isinstance(item, dict):
+                continue
+            missing = valid_keys - set(item.keys())
+            for k in missing:
+                item[k] = "" if k in ("direction", "kind", "text", "media_path", "caption") else 0
+            cleaned.append(item)
+        if len(cleaned) != len(self._outbox):
+            self._outbox = cleaned
+            self._save_state()
 
     async def init(self) -> bool:
         """初始化两个 WeixinClient + WeixinBot"""
+        # 迁移旧 state 格式
+        self._migrate_tokens()
+        self._ensure_outbox_shape()
+
         for name, acc in ACCOUNTS.items():
             session_file = find_session_file(acc["session_dir"])
             if not session_file:
@@ -583,107 +631,124 @@ class CoupleRelay:
     def _mark_sent(self, key: str, text: str) -> None:
         self._recently_sent.append((key, text, time.time()))
 
-    async def send_to_partner(self, text: str, context_token: str = "", max_retries: int = 3) -> bool:
-        """用对象的 bot 发消息给对象的微信(带重试)"""
-        client = ACCOUNTS["partner"]["client"]
-        if not client:
+    async def _send_text(self, direction: str, text: str, context_token: str, queue_on_failure: bool = True) -> bool:
+        """统一文本发送入口。失败时默认进队列,不重试同一过期 token。"""
+        account = "partner" if direction == "partner" else "me"
+        client = ACCOUNTS[account]["client"]
+        if not client or not context_token:
+            if not context_token:
+                logger.warning(f"[发送→{direction}] 没有 context_token")
+            if queue_on_failure:
+                self._enqueue(direction, "text", text, "", "")
             return False
-        for attempt in range(1, max_retries + 1):
-            try:
-                if context_token:
-                    await client.send_text(
-                        to_user_id=ACCOUNTS["partner"]["wechat_user_id"],
-                        text=text,
-                        context_token=context_token,
-                    )
-                else:
-                    logger.warning("[发送→partner] 没有 context_token")
-                    return False
-                logger.info(f"[发送→对象] {text[:80]}")
-                self._mark_sent("partner", text)
-                return True
-            except Exception as e:
-                err_str = str(e)
-                if "ret=-2" in err_str and attempt < max_retries:
-                    logger.warning(f"[发送→对象] ret=-2, 重试第{attempt}次...")
-                    await asyncio.sleep(1.0)
-                else:
-                    logger.error(f"[发送→对象] 失败({attempt}/{max_retries}): {e}")
-                    return False
-        return False
+        to_user_id = ACCOUNTS[account]["wechat_user_id"]
+        try:
+            await client.send_text(
+                to_user_id=to_user_id,
+                text=text,
+                context_token=context_token,
+            )
+            logger.info(f"[发送→{direction}] {text[:80]}")
+            self._mark_sent(account, text)
+            return True
+        except Exception as e:
+            logger.warning(f"[发送→{direction}] 失败: {str(e)[:120]}")
+            if queue_on_failure:
+                self._enqueue(direction, "text", text, "", "")
+            return False
+
+    async def _send_media(self, direction: str, file_path: str, context_token: str, caption: str, queue_on_failure: bool = True) -> bool:
+        """统一媒体发送入口。失败时默认进队列。"""
+        account = "partner" if direction == "partner" else "me"
+        client = ACCOUNTS[account]["client"]
+        if not client or not context_token:
+            if not context_token:
+                logger.warning(f"[发送媒体→{direction}] 没有 context_token")
+            if queue_on_failure:
+                self._enqueue(direction, "media", "", file_path, caption)
+            return False
+        to_user_id = ACCOUNTS[account]["wechat_user_id"]
+        try:
+            await client.send_media_file(
+                to_user_id=to_user_id,
+                file_path=file_path,
+                context_token=context_token,
+                text=caption,
+            )
+            logger.info(f"[发送媒体→{direction}] {file_path} {caption[:40] if caption else ''}")
+            return True
+        except Exception as e:
+            logger.warning(f"[发送媒体→{direction}] 失败: {str(e)[:120]}")
+            if queue_on_failure:
+                self._enqueue(direction, "media", "", file_path, caption)
+            return False
+
+    def _enqueue(self, direction: str, kind: str, text: str, media_path: str, caption: str) -> None:
+        """发送失败时加入待重试队列,去重,持久化。"""
+        # 去重: 同方向同内容已存在则跳过
+        for item in self._outbox:
+            if (item["direction"] == direction and item["kind"] == kind
+                    and item["text"] == text and item["media_path"] == media_path):
+                logger.debug(f"[队列] 重复,跳过: {direction} {text[:40] or media_path}")
+                return
+        item = {
+            "direction": direction,
+            "kind": kind,
+            "text": text,
+            "media_path": media_path,
+            "caption": caption,
+            "created_at": time.time(),
+            "next_try": time.time() + 5.0,
+            "attempts": 0,
+        }
+        self._outbox.append(item)
+        self._save_state()
+        logger.info(f"[队列] {direction} {kind} 待发送: {text[:40] or media_path or caption}")
+
+    async def _flush_outbox(self, direction: str, context_token: str) -> None:
+        """用新 token 重试某方向的队列。指数退避, 发送间隔 1.5~3s。"""
+        if not context_token:
+            return
+        now = time.time()
+        to_try = [i for i, item in enumerate(self._outbox)
+                  if item["direction"] == direction and item["next_try"] <= now]
+        if not to_try:
+            return
+        logger.info(f"[队列] {direction} 方向有 {len(to_try)} 条待重试")
+        for idx in reversed(to_try):
+            item = self._outbox[idx]
+            await asyncio.sleep(random.uniform(1.5, 3.0))
+            if item["kind"] == "text":
+                ok = await self._send_text(direction, item["text"], context_token, queue_on_failure=False)
+            else:
+                ok = await self._send_media(direction, item["media_path"], context_token, item["caption"], queue_on_failure=False)
+            if ok:
+                self._outbox.pop(idx)
+                self._save_state()
+                logger.info(f"[队列] {direction} 发送成功,移除")
+            else:
+                item["attempts"] += 1
+                # 指数退避: 5, 10, 20, 40, 60... 最大 60s
+                backoff = min(60.0, 5.0 * (2 ** item["attempts"]))
+                item["next_try"] = time.time() + backoff
+                self._save_state()
+                logger.info(f"[队列] {direction} 重试失败 #{item['attempts']}, 下次 {backoff:.0f}s 后")
+
+    async def send_to_partner(self, text: str, context_token: str = "", max_retries: int = 3) -> bool:
+        """用对象的 bot 发消息给对象的微信。失败进队列。"""
+        return await self._send_text("partner", text, context_token, queue_on_failure=True)
 
     async def send_media_to_partner(self, file_path: str, context_token: str = "", caption: str = "") -> bool:
-        """用对象的 bot 发媒体文件给对象的微信"""
-        client = ACCOUNTS["partner"]["client"]
-        if not client:
-            return False
-        try:
-            if not context_token:
-                logger.warning("[发送→partner] 没有 context_token,无法发媒体")
-                return False
-            await client.send_media_file(
-                to_user_id=ACCOUNTS["partner"]["wechat_user_id"],
-                file_path=file_path,
-                context_token=context_token,
-                text=caption,
-            )
-            logger.info(f"[发送→对象媒体] {file_path} {caption[:40] if caption else ''}")
-            return True
-        except Exception as e:
-            logger.error(f"[发送→对象媒体] 失败: {e}")
-            return False
+        """用对象的 bot 发媒体文件给对象的微信。失败进队列。"""
+        return await self._send_media("partner", file_path, context_token, caption, queue_on_failure=True)
 
     async def send_to_me(self, text: str, context_token: str = "", max_retries: int = 3) -> bool:
-        """用你的 bot 发消息给你的微信(带重试)"""
-        client = ACCOUNTS["me"]["client"]
-        if not client:
-            return False
-        last_err = ""
-        for attempt in range(1, max_retries + 1):
-            try:
-                if context_token:
-                    await client.send_text(
-                        to_user_id=ACCOUNTS["me"]["wechat_user_id"],
-                        text=text,
-                        context_token=context_token,
-                    )
-                else:
-                    logger.warning("[发送→me] 没有 context_token")
-                    return False
-                logger.info(f"[发送→你] {text[:80]}")
-                self._mark_sent("me", text)
-                return True
-            except Exception as e:
-                err_str = str(e)
-                last_err = err_str
-                if "ret=-2" in err_str and attempt < max_retries:
-                    logger.warning(f"[发送→你] ret=-2, 重试第{attempt}次...")
-                    await asyncio.sleep(1.0)
-                else:
-                    logger.error(f"[发送→你] 失败({attempt}/{max_retries}): {e}")
-                    return False
-        return False
+        """用你的 bot 发消息给你的微信。失败进队列。"""
+        return await self._send_text("me", text, context_token, queue_on_failure=True)
 
     async def send_media_to_me(self, file_path: str, context_token: str = "", caption: str = "") -> bool:
-        """用你的 bot 发媒体文件给你的微信"""
-        client = ACCOUNTS["me"]["client"]
-        if not client:
-            return False
-        try:
-            if not context_token:
-                logger.warning("[发送→me] 没有 context_token,无法发媒体")
-                return False
-            await client.send_media_file(
-                to_user_id=ACCOUNTS["me"]["wechat_user_id"],
-                file_path=file_path,
-                context_token=context_token,
-                text=caption,
-            )
-            logger.info(f"[发送→你媒体] {file_path} {caption[:40] if caption else ''}")
-            return True
-        except Exception as e:
-            logger.error(f"[发送→你媒体] 失败: {e}")
-            return False
+        """用你的 bot 发媒体文件给你的微信。失败进队列。"""
+        return await self._send_media("me", file_path, context_token, caption, queue_on_failure=True)
 
     async def _ai_reply_after_delay(self) -> None:
         """4秒后 AI 自动回复"""
@@ -755,15 +820,15 @@ class CoupleRelay:
         # 强制拆分成短句(不再依赖 AI 输出格式)
         parts = self._force_split(ai_text, max_len=15)
 
-        # 逐条发给对象(间隔 0.6~1.2 秒)
-        partner_token = self._ctx_tokens.get("partner", "")
+        # 逐条发给对象(间隔 1.5~3 秒)
+        partner_token = self._token_for("partner")
         for i, part in enumerate(parts):
             await self.send_to_partner(part, partner_token)
             if i < len(parts) - 1:
-                await asyncio.sleep(random.uniform(0.6, 1.2))
+                await asyncio.sleep(random.uniform(1.5, 3.0))
 
         # 同步给你(合并一条发,标记第几条)
-        me_token = self._ctx_tokens.get("me", "")
+        me_token = self._token_for("me")
         me_text = "\n".join(f"【第{i+1}条】：{p}" for i, p in enumerate(parts))
         await self.send_to_me(me_text, me_token)
 
@@ -894,12 +959,12 @@ class CoupleRelay:
                 logger.info(f"[媒体] 已下载: {file_path}")
 
                 if direction == "me_to_partner":
-                    partner_token = self._ctx_tokens.get("partner", "")
+                    partner_token = self._token_for("partner")
                     await self.send_media_to_partner(file_path, partner_token)
                     self.context.add("me", desc)
                     logger.info(f"[你发媒体] {desc} -> 对象")
                 elif direction == "partner_to_me":
-                    me_token = self._ctx_tokens.get("me", "")
+                    me_token = self._token_for("me")
                     await self.send_media_to_me(file_path, me_token)
                     logger.info(f"[对象发媒体] {desc} -> 你")
 
@@ -1125,10 +1190,11 @@ class CoupleRelay:
         logger.info(f"  日志 = {LOG_FILE}")
         logger.info("=" * 50)
 
-        # 启动两个轮询任务
+        # 启动两个轮询任务 + 后台重试队列
         tasks = [
             asyncio.create_task(self._poll_me()),
             asyncio.create_task(self._poll_partner()),
+            asyncio.create_task(self._retry_loop()),
         ]
 
         try:
@@ -1138,6 +1204,20 @@ class CoupleRelay:
         finally:
             self._running = False
             logger.info("Relay 已停止")
+
+    async def _retry_loop(self) -> None:
+        """后台循环:每 5 秒检查队列,用当前有效 token 重试"""
+        while self._running:
+            try:
+                await asyncio.sleep(5)
+                for direction in ("me", "partner"):
+                    token = self._token_for(direction)
+                    if token:
+                        await self._flush_outbox(direction, token)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[队列循环] 异常: {e}")
 
     async def _poll_me(self) -> None:
         """轮询你的 clawbot 收到的消息(你在微信发的消息)"""
@@ -1173,9 +1253,9 @@ class CoupleRelay:
         # 保存 context_token
         ctx = msg.context_token or ""
         if ctx:
-            self._ctx_tokens["me"] = ctx
-            self._save_ctx_tokens()
+            self._set_token("me", ctx)
             logger.info(f"[你] context_token 已保存: {ctx[:20]}...")
+            await self._flush_outbox("me", ctx)
         else:
             logger.warning(f"[你] 消息没有 context_token! type={type(msg).__name__}")
 
@@ -1205,8 +1285,8 @@ class CoupleRelay:
         self.context.add("me", text)
         logger.info(f"[你发] {text[:80]}")
 
-        # 转发给对象
-        partner_token = self._ctx_tokens.get("partner", "")
+        # 转发给对象(需要对象方向的可用 token; 失败会自动进队列)
+        partner_token = self._token_for("partner")
         await self.send_to_partner(text, partner_token)
 
         # 你回复了,取消 AI 定时器
@@ -1220,9 +1300,10 @@ class CoupleRelay:
         # 保存 context_token
         ctx = msg.context_token or ""
         if ctx:
-            self._ctx_tokens["partner"] = ctx
-            self._save_ctx_tokens()
+            self._set_token("partner", ctx)
             logger.info(f"[对象] context_token 已保存: {ctx[:20]}...")
+            # 新 token 可能可以重试 partner 方向待发送队列
+            await self._flush_outbox("partner", ctx)
         else:
             logger.warning(f"[对象] 消息没有 context_token! type={type(msg).__name__}")
 
@@ -1266,8 +1347,8 @@ class CoupleRelay:
         self.context.add("partner", text)
         logger.info(f"[对象发] {text[:80]}")
 
-        # 转发给你
-        me_token = self._ctx_tokens.get("me", "")
+        # 转发给你(需要 me 方向的可用 token; 失败会自动进队列)
+        me_token = self._token_for("me")
         await self.send_to_me(text, me_token)
 
         # 启动 AI 延迟回复
@@ -1347,17 +1428,18 @@ class RAGIndex:
         words = re.findall(r'[\u4e00-\u9fff]{2,}', text)  # 2字以上的中文词
         return words
     
-    def search(self, query: str, top_k: int = 3) -> list[tuple[str, str]]:
-        """检索最相关的对话对"""
+    def search(self, query: str, top_k: int = 3, max_pairs: int = 5000) -> list[tuple[str, str]]:
+        """检索最相关的对话对; max_pairs 限制扫描数量防止 CSV 大时超时"""
         if not self.loaded or not self.pairs:
             return []
         query_words = set(self._tokenize(query))
         if not query_words:
             return []
         
-        # 对每个对话对算匹配分
+        # 对每个对话对算匹配分(最多扫描 max_pairs 条, 防大数据超时)
         scores = []
-        for idx, (partner_msg, user_reply) in enumerate(self.pairs):
+        limit_pairs = self.pairs[:max_pairs]
+        for idx, (partner_msg, user_reply) in enumerate(limit_pairs):
             msg_words = set(self._tokenize(partner_msg))
             overlap = len(query_words & msg_words)
             if overlap > 0:
