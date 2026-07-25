@@ -49,6 +49,17 @@ LOG_FILE = LOG_DIR / "fnchat_relay.log"
 MAX_CONTEXT = 50
 SENT_DEDUPE_SEC = 15
 
+# ============== GLM-4V 图片理解配置 ==============
+GLM_VISION_KEY = "33bcc74100de4bf09ed5ff389b765633.fJBM4RZgjgmXZRX3"
+GLM_VISION_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+GLM_VISION_MODEL = "glm-4v-flash"  # 永久免费
+
+
+def is_image_file(path: str) -> bool:
+    """判断文件是否为图片"""
+    ext = path.lower().rsplit(".", 1)[-1] if "." in path else ""
+    return ext in ("jpg", "jpeg", "png", "gif", "webp", "bmp")
+
 
 # ============== 账号配置 ==============
 # xs = 你 (你的微信跟你的 clawbot 聊)
@@ -527,6 +538,7 @@ class CoupleRelay:
         self._running = False
         self._recently_sent: deque = deque()
         self._ctx_tokens: dict[str, str] = {}
+        self._image_desc_for_ai: str = ""  # GLM-4V 图片描述,供 AI 回复使用
 
         # 从文件加载已保存的 context_token
         saved_state = load_json(STATE_FILE, {})
@@ -891,6 +903,10 @@ class CoupleRelay:
                     await self.send_media_to_me(file_path, me_token)
                     logger.info(f"[对象发媒体] {desc} -> 你")
 
+                    # 如果是图片,调 GLM-4V 描述供 AI 使用
+                    if is_image_file(file_path):
+                        self._image_desc_for_ai = await self._describe_image(file_path)
+
                 asyncio.get_event_loop().call_later(
                     60, lambda p=file_path: self._cleanup_media(p)
                 )
@@ -1039,6 +1055,50 @@ class CoupleRelay:
         except Exception:
             pass
 
+    async def _describe_image(self, image_path: str) -> str:
+        """调智谱 GLM-4V-Flash 描述图片内容(永久免费)"""
+        import base64
+        try:
+            with open(image_path, "rb") as f:
+                img_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+            ext = image_path.lower().rsplit(".", 1)[-1] if "." in image_path else "jpg"
+            mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp"}
+            mime = mime_map.get(ext, "image/jpeg")
+
+            payload = {
+                "model": GLM_VISION_MODEL,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_b64}"}},
+                        {"type": "text", "text": "用中文简短描述这张图片的内容(30字以内),只说你看到了什么。"},
+                    ]
+                }],
+                "max_tokens": 200,
+                "temperature": 0.5,
+            }
+
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    GLM_VISION_URL,
+                    headers={
+                        "Authorization": f"Bearer {GLM_VISION_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                data = resp.json()
+                if "error" in data:
+                    logger.error(f"[图片描述] GLM API 错误: {data['error']}")
+                    return ""
+                desc = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                logger.info(f"[图片描述] {desc}")
+                return desc.strip()
+        except Exception as e:
+            logger.error(f"[图片描述] 失败: {e}", exc_info=True)
+            return ""
+
     def _schedule_ai_timer(self) -> None:
         if not self.persona.ai_available():
             return
@@ -1170,13 +1230,18 @@ class CoupleRelay:
         media_items = msg.media_items() if hasattr(msg, "media_items") else []
         if media_items:
             await self._handle_media(msg, media_items, direction="partner_to_me")
-            # 记录上下文
+            # 记录上下文:如果有图片描述就用描述,否则用消息文本
             text_summary = msg.text() if hasattr(msg, "text") and callable(msg.text) else ""
-            if text_summary:
+            if self._image_desc_for_ai:
+                # 图片描述作为对象发的消息记入上下文
+                ctx_text = f"[图片] {self._image_desc_for_ai}"
+                self.context.add("partner", ctx_text)
+                self._image_desc_for_ai = ""  # 用完清空
+            elif text_summary:
                 self.context.add("partner", text_summary)
             else:
                 self.context.add("partner", "[媒体]")
-            # 媒体也触发 AI(语音可能有转文字)
+            # 媒体也触发 AI
             self._schedule_ai_timer()
             return
 
