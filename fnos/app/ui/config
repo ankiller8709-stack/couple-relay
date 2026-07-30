@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "couple-relay-web.main": {
+      "title": "Couple Relay Web",
+      "icon": "images/icon_{0}.png",
+      "type": "url",
+      "protocol": "http",
+      "port": "{port}",
+      "url": "/",
+      "allUsers": false
+    }
+  }
+}

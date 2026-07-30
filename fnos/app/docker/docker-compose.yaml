@@ -1,0 +1,17 @@
+services:
+  relay:
+    build:
+      context: ./relay-src
+      dockerfile: Dockerfile
+    image: couple-relay-web:1.4.0-20260730
+    container_name: couple-relay-web-fnos
+    restart: unless-stopped
+    ports:
+      - "${TRIM_SERVICE_PORT}:8080"
+    environment:
+      ADMIN_PASSWORD: ${COUPLE_RELAY_ADMIN_PASSWORD:-admin}
+      DATA_DIR: /data
+      ILINK_BASE: https://ilinkai.weixin.qq.com
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ${TRIM_PKGVAR}/data:/data

@@ -1,0 +1,36 @@
+#!/bin/bash
+
+FILE_PATH="${TRIM_APPDEST}/docker/docker-compose.yaml"
+
+is_docker_running() {
+  local container_name
+  container_name=""
+  if [ -f "${FILE_PATH}" ]; then
+    container_name=$(grep "container_name" "${FILE_PATH}" | awk -F ':' '{print $2}' | xargs)
+  fi
+  if [ -n "${container_name}" ]; then
+    docker inspect "${container_name}" 2>/dev/null | grep -q '"Status": "running",'
+    return
+  fi
+  return 1
+}
+
+case "$1" in
+  start)
+    # Docker 应用由飞牛应用中心根据 config/resource 自动启动。
+    exit 0
+    ;;
+  stop)
+    # Docker 应用由飞牛应用中心根据 config/resource 自动停止。
+    exit 0
+    ;;
+  status)
+    if is_docker_running; then
+      exit 0
+    fi
+    exit 3
+    ;;
+  *)
+    exit 1
+    ;;
+esac

@@ -1,0 +1,1153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Couple Relay 管理后台</title>
+<style>
+:root{--primary:#4f46e5;--primary-h:#4338ca;--success:#10b981;--warning:#f59e0b;--error:#ef4444;--bg:#f3f4f6;--card:#fff;--text:#1f2937;--muted:#6b7280;--border:#e5e7eb;--side-bg:#1e293b;--side-text:#cbd5e1;--side-active:#4f46e5;--r:12px;--sh:0 1px 3px rgba(0,0,0,.1),0 1px 2px rgba(0,0,0,.06);--sh-lg:0 10px 15px -3px rgba(0,0,0,.1)}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+a{cursor:pointer;text-decoration:none}
+.login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%)}
+.login-card{background:#fff;padding:40px;border-radius:20px;box-shadow:var(--sh-lg);width:380px;text-align:center}
+.login-card h1{font-size:26px;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:8px}
+.login-card p{color:var(--muted);margin-bottom:24px}
+.login-card input{width:100%;padding:12px 16px;border:2px solid var(--border);border-radius:8px;font-size:16px;margin-bottom:16px}
+.login-card input:focus{outline:none;border-color:var(--primary)}
+.login-card button{width:100%;padding:12px;background:var(--primary);color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}
+.login-card button:hover{background:var(--primary-h)}
+.app{display:flex;min-height:100vh}
+.sidebar{width:220px;background:var(--side-bg);color:var(--side-text);position:fixed;height:100vh;overflow-y:auto}
+.sidebar-header{padding:20px;font-size:17px;font-weight:700;color:#fff;border-bottom:1px solid rgba(255,255,255,.1);display:flex;align-items:center;gap:10px}
+.sidebar nav{padding:12px 0}
+.sidebar nav a{display:flex;align-items:center;gap:10px;padding:11px 20px;color:var(--side-text);transition:all .2s;font-size:14px}
+.sidebar nav a:hover{background:rgba(255,255,255,.05);color:#fff}
+.sidebar nav a.active{background:var(--side-active);color:#fff}
+.sidebar-footer{position:absolute;bottom:0;width:100%;padding:16px 20px;font-size:12px;color:var(--muted);border-top:1px solid rgba(255,255,255,.1)}
+.content{margin-left:220px;flex:1;padding:24px;max-width:1400px}
+.card{background:var(--card);border-radius:var(--r);box-shadow:var(--sh);padding:20px;margin-bottom:16px}
+.card-title{font-size:16px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px;margin-bottom:24px}
+.stat-card{background:#fff;border-radius:var(--r);box-shadow:var(--sh);padding:20px}
+.stat-card .label{color:var(--muted);font-size:13px;margin-bottom:4px}
+.stat-card .value{font-size:28px;font-weight:700}
+.stat-card .icon{float:right;color:var(--primary);opacity:.35}
+.stat-card .icon svg{width:26px;height:26px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border:none;border-radius:8px;font-size:14px;cursor:pointer;transition:all .2s;font-weight:500}
+.btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-h)}
+.btn-success{background:var(--success);color:#fff}.btn-success:hover{opacity:.9}
+.btn-danger{background:var(--error);color:#fff}.btn-danger:hover{opacity:.9}
+.btn-warning{background:var(--warning);color:#fff}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--text)}.btn-outline:hover{background:var(--bg)}
+.btn-sm{padding:4px 10px;font-size:12px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-weight:500;margin-bottom:6px;font-size:13px}
+.form-group input,.form-group select,.form-group textarea{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{outline:none;border-color:var(--primary)}
+.form-group textarea{min-height:80px;resize:vertical}
+.form-row{display:flex;gap:12px}.form-row .form-group{flex:1}
+.hint{font-size:12px;color:var(--muted);margin-top:4px}
+.toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer}
+.toggle input{display:none}
+.toggle .switch{width:40px;height:22px;background:var(--border);border-radius:11px;position:relative;transition:background .2s}
+.toggle .switch::after{content:'';width:18px;height:18px;background:#fff;border-radius:50%;position:absolute;top:2px;left:2px;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.toggle input:checked + .switch{background:var(--success)}
+.toggle input:checked + .switch::after{transform:translateX(18px)}
+.badge{display:inline-flex;align-items:center;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:500}
+.badge-running,.badge-logged_in,.badge-sent{background:#d1fae5;color:#065f46}
+.badge-stopped,.badge-logged_out{background:#f3f4f6;color:#6b7280}
+.badge-error,.badge-failed{background:#fee2e2;color:#991b1b}
+.badge-paused,.badge-qr_pending,.badge-queued{background:#fef3c7;color:#92400e}
+.badge-info{background:#dbeafe;color:#1e40af}
+.tabs{display:flex;gap:4px;border-bottom:2px solid var(--border);margin-bottom:20px;flex-wrap:wrap}
+.tabs button{padding:10px 14px;background:none;border:none;cursor:pointer;font-size:14px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .2s;display:flex;align-items:center;gap:6px}
+.tabs button:hover{color:var(--text)}
+.tabs button.active{color:var(--primary);border-bottom-color:var(--primary);font-weight:500}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:10px 12px;border-bottom:2px solid var(--border);font-size:12px;color:var(--muted);font-weight:600}
+td{padding:10px 12px;border-bottom:1px solid var(--border)}
+tr:hover{background:var(--bg)}
+.pair-card{background:#fff;border-radius:var(--r);box-shadow:var(--sh);padding:20px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.pair-card .info h3{font-size:16px;margin-bottom:4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pair-card .info p{color:var(--muted);font-size:13px}
+.pair-card .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.qr-display{text-align:center;padding:20px}
+.qr-display img{max-width:240px;border-radius:12px;border:1px solid var(--border)}
+.qr-display .status{margin-top:12px;font-size:14px}
+.toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:8px;color:#fff;font-weight:500;z-index:9999;box-shadow:var(--sh-lg);animation:slideIn .3s;max-width:420px}
+.toast-success{background:var(--success)}
+.toast-error{background:var(--error)}
+.toast-info{background:var(--primary)}
+@keyframes slideIn{from{transform:translateX(400px)}to{transform:translateX(0)}}
+.empty{text-align:center;padding:40px;color:var(--muted)}
+.empty .icon{color:var(--primary);opacity:.25;margin-bottom:12px}
+.empty .icon svg{width:48px;height:48px}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.tag-list{display:flex;flex-wrap:wrap;gap:6px}
+.tag-item{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#eef2ff;color:var(--primary);border-radius:16px;font-size:13px}
+.tag-item .remove{cursor:pointer;font-weight:bold;opacity:.6}
+.tag-item .remove:hover{opacity:1}
+input[type=range]{width:100%;height:6px;background:var(--border);border-radius:3px;appearance:none;outline:none}
+input[type=range]::-webkit-slider-thumb{appearance:none;width:16px;height:16px;background:var(--primary);border-radius:50%;cursor:pointer}
+.dialog-item{background:var(--bg);padding:12px;border-radius:8px;margin-bottom:8px}
+.media-preview-mask{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:10000;display:flex;align-items:center;justify-content:center;padding:24px}
+.media-preview{background:var(--card);width:min(880px,100%);max-height:calc(100vh - 48px);overflow:auto;border-radius:var(--r);box-shadow:var(--sh-lg);padding:20px}
+.media-preview img{display:block;max-width:100%;max-height:70vh;margin:16px auto;border-radius:8px}.media-preview audio{width:100%;margin:18px 0}.media-preview .unsupported{padding:28px;text-align:center;color:var(--muted);background:var(--bg);border-radius:8px;margin:16px 0}
+.dialog-item .role{font-size:12px;color:var(--muted);font-weight:600;margin-bottom:4px}
+.dialog-item .text{font-size:14px}
+.divider{height:1px;background:var(--border);margin:16px 0}
+.muted{color:var(--muted)}.small{font-size:12px}
+.flex{display:flex;align-items:center;gap:8px}
+.flex-between{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.gap-8{gap:8px}.gap-12{gap:12px}
+.mt-8{margin-top:8px}.mt-16{margin-top:16px}.mb-8{margin-bottom:8px}.mb-16{margin-bottom:16px}
+.icon{display:inline-flex;align-items:center}.icon svg{width:16px;height:16px}
+.icon-lg svg{width:24px;height:24px}
+.flow-box{background:#eef2ff;border-radius:8px;padding:12px;line-height:1.8;font-size:13px}
+.resource-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.resource-card{background:#fff;border-radius:var(--r);box-shadow:var(--sh);padding:16px;cursor:pointer;transition:transform .1s,border .2s;border:2px solid transparent}
+.resource-card:hover{transform:translateY(-2px);border-color:var(--primary)}
+.resource-card h4{font-size:15px;margin-bottom:6px}
+.resource-card p{font-size:12px;color:var(--muted)}
+.resource-card .meta{margin-top:10px;font-size:12px;color:var(--muted)}
+.queue-item{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px;margin-bottom:8px}
+.health-ok{color:var(--success)}.health-bad{color:var(--error)}
+</style>
+</head>
+<body>
+<svg style="display:none">
+  <symbol id="i-dash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-pairs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="i-ai" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></symbol>
+  <symbol id="i-persona" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-log" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+  <symbol id="i-clone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
+  <symbol id="i-queue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
+  <symbol id="i-heart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></symbol>
+</svg>
+
+<div id="app">
+  <div v-if="toast.show" class="toast" :class="'toast-'+toast.type">{{ toast.message }}</div>
+
+  <!-- Login -->
+  <div v-if="!token" class="login-page">
+    <div class="login-card">
+      <h1><span class="icon icon-lg" v-html="ic('i-heart')"></span> Couple Relay</h1>
+      <p>微信消息中继管理系统</p>
+      <input v-model="loginPassword" type="password" placeholder="管理员密码" @keyup.enter="doLogin">
+      <button @click="doLogin" :disabled="loggingIn"><span v-if="loggingIn" class="spinner"></span> 登录</button>
+    </div>
+  </div>
+
+  <!-- Main App -->
+  <div v-else class="app">
+    <aside class="sidebar">
+      <div class="sidebar-header"><span class="icon" v-html="ic('i-heart')"></span> Couple Relay</div>
+      <nav>
+        <a @click="goPage('dashboard')" :class="{active:page==='dashboard'}"><span class="icon" v-html="ic('i-dash')"></span> 仪表盘</a>
+        <a @click="goPage('pairs')" :class="{active:page==='pairs'||page==='pair'}"><span class="icon" v-html="ic('i-pairs')"></span> 配对管理</a>
+        <a @click="goPage('ai-models')" :class="{active:page==='ai-models'}"><span class="icon" v-html="ic('i-ai')"></span> AI 模型</a>
+        <a @click="goPage('personas')" :class="{active:page==='personas'}"><span class="icon" v-html="ic('i-persona')"></span> 人格</a>
+        <a @click="goPage('worldbooks')" :class="{active:page==='worldbooks'}"><span class="icon" v-html="ic('i-book')"></span> 世界书</a>
+        <a @click="goPage('keyword-sets')" :class="{active:page==='keyword-sets'}"><span class="icon" v-html="ic('i-key')"></span> 关键词集</a>
+        <a @click="goPage('tool-sets')" :class="{active:page==='tool-sets'}"><span class="icon" v-html="ic('i-ai')"></span> 工具触发词</a>
+        <a @click="goPage('media-library')" :class="{active:page==='media-library'}"><span class="icon" v-html="ic('i-msg')"></span> 媒体库</a>
+        <a @click="goPage('settings')" :class="{active:page==='settings'}"><span class="icon" v-html="ic('i-gear')"></span> 系统设置</a>
+      </nav>
+      <div class="sidebar-footer">v1.1.0</div>
+    </aside>
+
+    <main class="content">
+      <!-- ================= Dashboard ================= -->
+      <template v-if="page==='dashboard'">
+        <h2 style="margin-bottom:20px">仪表盘</h2>
+        <div class="stats-grid">
+          <div class="stat-card"><div class="icon" v-html="ic('i-pairs')"></div><div class="label">配对总数</div><div class="value">{{ dash.pairs||0 }}</div></div>
+          <div class="stat-card"><div class="icon" v-html="ic('i-play')"></div><div class="label">运行中</div><div class="value" style="color:var(--success)">{{ dash.running||0 }}</div></div>
+          <div class="stat-card"><div class="icon" v-html="ic('i-phone')"></div><div class="label">在线账号</div><div class="value">{{ dash.accounts_online||0 }}</div></div>
+          <div class="stat-card"><div class="icon" v-html="ic('i-msg')"></div><div class="label">今日消息</div><div class="value">{{ dash.messages_today||0 }}</div></div>
+          <div class="stat-card"><div class="icon" v-html="ic('i-ai')"></div><div class="label">今日AI回复</div><div class="value" style="color:var(--primary)">{{ dash.ai_today||0 }}</div></div>
+        </div>
+        <div class="card">
+          <div class="card-title">配对状态概览</div>
+          <div v-if="(dash.pairs_list||[]).length===0" class="empty"><div class="icon" v-html="ic('i-pairs')"></div><p>还没有配对，去创建一个吧</p></div>
+          <table v-else>
+            <thead><tr><th>名称</th><th>状态</th><th>账号A</th><th>账号B</th><th>今日消息</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr v-for="p in (dash.pairs_list||[])" :key="p.id">
+                <td><strong>{{ p.name }}</strong></td>
+                <td><span class="badge" :class="'badge-'+p.status">{{ p.status }}</span></td>
+                <td>{{ accNick(p,0) }} <span class="badge" :class="'badge-'+accStatus(p,0)" style="font-size:10px">{{ accStatus(p,0) }}</span></td>
+                <td>{{ accNick(p,1) }} <span class="badge" :class="'badge-'+accStatus(p,1)" style="font-size:10px">{{ accStatus(p,1) }}</span></td>
+                <td>{{ (p.message_stats||{}).today||0 }}</td>
+                <td>
+                  <button class="btn btn-sm btn-primary" @click="openPair(p.id)">管理</button>
+                  <button v-if="p.status!=='running'" class="btn btn-sm btn-success" @click="startPair(p.id)"><span class="icon" v-html="ic('i-play')"></span></button>
+                  <button v-else class="btn btn-sm btn-warning" @click="stopPair(p.id)"><span class="icon" v-html="ic('i-stop')"></span></button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <!-- ================= Pairs List ================= -->
+      <template v-if="page==='pairs'">
+        <div class="flex-between mb-16">
+          <h2>配对管理</h2>
+          <button class="btn btn-primary" @click="showCreatePair=true"><span class="icon" v-html="ic('i-plus')"></span> 新建配对</button>
+        </div>
+        <div v-if="showCreatePair" class="card">
+          <div class="card-title">新建配对</div>
+          <div class="form-group"><label>配对名称</label><input v-model="newPairName" placeholder="如：我和对象"></div>
+          <div class="form-group"><label>描述</label><input v-model="newPairDesc" placeholder="可选"></div>
+          <div class="form-row">
+            <div class="form-group"><label>消息方向</label>
+              <select v-model="newPairDir"><option value="bidirectional">双向 (A↔B)</option><option value="a_to_b">A→B 单向</option><option value="b_to_a">B→A 单向</option></select>
+            </div>
+            <div class="form-group"><label>AI 触发方</label>
+              <select v-model="newPairTrigger"><option value="B">B 发消息触发 AI</option><option value="A">A 发消息触发 AI</option></select>
+            </div>
+          </div>
+          <div class="hint flow-box mb-16"><strong>消息流向：</strong>触发方发消息 → 正常转发给非触发方 + 触发AI → AI以非触发方口吻回复 → 分条发给触发方 → 合并【第1条】【第2条】同步给非触发方</div>
+          <div class="flex gap-8"><button class="btn btn-primary" @click="createPair">创建</button><button class="btn btn-outline" @click="showCreatePair=false">取消</button></div>
+        </div>
+        <div v-if="pairs.length===0" class="empty"><div class="icon" v-html="ic('i-pairs')"></div><p>还没有配对</p></div>
+        <div v-for="p in pairs" :key="p.id" class="pair-card">
+          <div class="info">
+            <h3>{{ p.name }} <span class="badge" :class="'badge-'+p.status">{{ p.status }}</span> <span class="badge badge-info" v-if="p.ai_enabled">AI触发:{{p.ai_trigger_side||'B'}}</span></h3>
+            <p>{{ p.description||'无描述' }} · 模型: {{ p.ai_model_name||'-' }} · 人格: {{ p.persona_name||'-' }} · 今日: {{ (p.message_stats||{}).today||0 }} 条</p>
+          </div>
+          <div class="actions">
+            <button class="btn btn-sm btn-primary" @click="openPair(p.id)">管理</button>
+            <button v-if="p.status!=='running'" class="btn btn-sm btn-success" @click="startPair(p.id)"><span class="icon" v-html="ic('i-play')"></span> 启动</button>
+            <button v-else class="btn btn-sm btn-warning" @click="stopPair(p.id)"><span class="icon" v-html="ic('i-stop')"></span> 停止</button>
+            <button class="btn btn-sm btn-outline" @click="clonePair(p.id)"><span class="icon" v-html="ic('i-clone')"></span></button>
+            <button class="btn btn-sm btn-danger" @click="deletePair(p.id)"><span class="icon" v-html="ic('i-trash')"></span></button>
+          </div>
+        </div>
+      </template>
+
+      <!-- ================= Pair Detail ================= -->
+      <template v-if="page==='pair' && pair.id">
+        <div class="flex-between mb-16">
+          <div class="flex gap-8">
+            <button class="btn btn-outline" @click="goPage('pairs')"><span class="icon" v-html="ic('i-back')"></span> 返回</button>
+            <h2>{{ pair.name }}</h2>
+            <span class="badge" :class="'badge-'+pair.status">{{ pair.status }}</span>
+          </div>
+          <div class="flex gap-8">
+            <button v-if="pair.status!=='running'" class="btn btn-success" @click="startPair(pair.id)"><span class="icon" v-html="ic('i-play')"></span> 启动</button>
+            <button v-else class="btn btn-warning" @click="stopPair(pair.id)"><span class="icon" v-html="ic('i-stop')"></span> 停止</button>
+            <button v-if="pair.status==='running'" class="btn btn-outline" @click="restartPair(pair.id)"><span class="icon" v-html="ic('i-refresh')"></span> 重启</button>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <button @click="tab='accounts'" :class="{active:tab==='accounts'}"><span class="icon" v-html="ic('i-phone')"></span> 账号绑定</button>
+          <button @click="tab='resources'" :class="{active:tab==='resources'}"><span class="icon" v-html="ic('i-link')"></span> 资源引用</button>
+          <button @click="tab='messages'" :class="{active:tab==='messages'}"><span class="icon" v-html="ic('i-msg')"></span> 消息记录</button>
+          <button @click="tab='queue'" :class="{active:tab==='queue'}"><span class="icon" v-html="ic('i-queue')"></span> 发送队列<span v-if="queue.outbox_size" class="badge badge-queued">{{ queue.outbox_size }}</span></button>
+          <button @click="tab='logs'" :class="{active:tab==='logs'}"><span class="icon" v-html="ic('i-log')"></span> 日志</button>
+          <button @click="tab='quiet'" :class="{active:tab==='quiet'}"><span class="icon" v-html="ic('i-moon')"></span> 静默时段</button>
+          <button @click="tab='settings'" :class="{active:tab==='settings'}"><span class="icon" v-html="ic('i-gear')"></span> 配对设置</button>
+        </div>
+
+        <!-- Accounts -->
+        <div v-if="tab==='accounts'">
+          <div v-for="acc in (pair.accounts||[])" :key="acc.id" class="card">
+            <div class="card-title">账号 {{ acc.role }}: {{ acc.nickname }}
+              <span class="badge" :class="'badge-'+acc.login_status">{{ acc.login_status }}</span>
+            </div>
+            <div v-if="acc.login_status==='logged_in'" class="flex-between">
+              <div>
+                <p class="muted small">Bot ID: {{ acc.bot_id||'-' }}</p>
+                <p class="muted small">微信ID: {{ acc.wxid||'-' }}</p>
+                <p class="muted small">最后活跃: {{ acc.last_active||'-' }}</p>
+              </div>
+              <button class="btn btn-danger" @click="logoutAccount(acc.id)">登出</button>
+            </div>
+            <div v-else>
+              <div class="flex gap-8">
+                <input v-model="acc.nickname" placeholder="账号昵称" class="form-group" style="flex:1;margin-bottom:0">
+                <button class="btn btn-outline" @click="updateAccount(acc)">保存昵称</button>
+                <button class="btn btn-primary" @click="startQrLogin(acc.id)"><span class="icon" v-html="ic('i-phone')"></span> 扫码登录</button>
+              </div>
+              <div v-if="qrAccountId===acc.id && qrImage" class="qr-display">
+                <img :src="qrImage" alt="QR Code">
+                <div class="status" v-if="qrStatus==='wait'">等待扫码...</div>
+                <div class="status" v-if="qrStatus==='scanned'">已扫码, 请在手机上确认...</div>
+                <div class="status" v-if="qrStatus==='confirmed'" style="color:var(--success)">登录成功!</div>
+                <div class="status" v-if="qrStatus==='expired'" style="color:var(--error)">二维码已过期</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Resources -->
+        <div v-if="tab==='resources'">
+          <div class="card">
+            <div class="card-title">资源引用配置</div>
+            <p class="muted small mb-16">AI 模型 / 人格 / 世界书 / 关键词集 / 工具触发词都在左侧对应菜单中管理，这里只选择本配对使用哪一套。</p>
+            <div class="form-group"><label>AI 模型</label>
+              <select v-model="pair.ai_model_id" @change="savePairResources">
+                <option :value="null">— 不使用 —</option>
+                <option v-for="m in aiModels" :key="m.id" :value="m.id">{{ m.name }} ({{ m.model }})</option>
+              </select>
+            </div>
+            <div class="form-group"><label>人格 / 角色卡</label>
+              <select v-model="pair.persona_id" @change="savePairResources">
+                <option :value="null">— 不使用 —</option>
+                <option v-for="p in personas" :key="p.id" :value="p.id">{{ p.name }}</option>
+              </select>
+            </div>
+            <div class="form-group"><label>世界书</label>
+              <select v-model="pair.worldbook_id" @change="savePairResources">
+                <option :value="null">— 不使用 —</option>
+                <option v-for="wb in worldbooks" :key="wb.id" :value="wb.id">{{ wb.name }}</option>
+              </select>
+            </div>
+            <div class="form-group"><label>关键词集</label>
+              <select v-model="pair.keyword_set_id" @change="savePairResources">
+                <option :value="null">— 不使用 —</option>
+                <option v-for="ks in keywordSets" :key="ks.id" :value="ks.id">{{ ks.name }}</option>
+              </select>
+            </div>
+            <div class="form-group"><label>工具触发词集 <span class="muted small">(命中后调用工具，再由当前人格自然回复)</span></label>
+              <select v-model="pair.tool_set_id" @change="savePairResources">
+                <option :value="null">— 不使用 —</option>
+                <option v-for="ts in toolSets" :key="ts.id" :value="ts.id">{{ ts.name }}</option>
+              </select>
+            </div>
+            <div class="form-group"><label>视觉 AI 模型 <span class="muted small">(图片识别 + 语音转文字)</span></label>
+              <select v-model="pair.vision_model_id" @change="savePairResources">
+                <option :value="null">— 不使用 (图片/语音不触发AI) —</option>
+                <option v-for="m in aiModels" :key="m.id" :value="m.id">{{ m.name }} ({{ m.model }})</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Messages -->
+        <div v-if="tab==='messages'">
+          <div class="card">
+            <div class="card-title">
+              <span class="flex"><span class="icon" v-html="ic('i-msg')"></span> 消息记录</span>
+              <div class="flex gap-8">
+                <button class="btn btn-sm" :class="msgFilter==='all'?'btn-primary':'btn-outline'" @click="msgFilter='all';loadMessages()">全部</button>
+                <button class="btn btn-sm" :class="msgFilter==='A'?'btn-primary':'btn-outline'" @click="msgFilter='A';loadMessages()">A 发出</button>
+                <button class="btn btn-sm" :class="msgFilter==='B'?'btn-primary':'btn-outline'" @click="msgFilter='B';loadMessages()">B 发出</button>
+                <button class="btn btn-sm" :class="msgFilter==='ai'?'btn-primary':'btn-outline'" @click="msgFilter='ai';loadMessages()">仅AI</button>
+                <button class="btn btn-sm btn-outline" @click="loadMessages"><span class="icon" v-html="ic('i-refresh')"></span></button>
+              </div>
+            </div>
+            <p class="muted small mb-16">总计 {{ (msgStats||{}).total||0 }} 条 · AI {{ (msgStats||{}).ai||0 }} 条 · 今日 {{ (msgStats||{}).today||0 }} 条</p>
+            <div v-if="messages.length===0" class="empty"><div class="icon" v-html="ic('i-msg')"></div><p>暂无消息记录</p></div>
+            <table v-else>
+              <thead><tr><th>时间</th><th>方向</th><th>发送者</th><th>内容</th><th>状态</th></tr></thead>
+              <tbody>
+                <tr v-for="m in messages" :key="m.id">
+                  <td class="small">{{ m.timestamp }}</td>
+                  <td><span class="badge" :class="m.direction==='A_to_B'?'badge-info':'badge-running'">{{ m.direction }}</span></td>
+                  <td>{{ m.sender }}<span v-if="m.ai_generated" class="badge badge-info" style="margin-left:4px">AI</span></td>
+                  <td>{{ m.content.length>60?m.content.slice(0,60)+'...':m.content }}</td>
+                  <td><span class="badge" :class="statusBadge(m.status)" :title="m.status">{{ statusShort(m.status) }}</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card">
+            <div class="card-title">手动发送消息</div>
+            <div class="form-row">
+              <div class="form-group" style="flex:1"><label>方向</label><select v-model="manualMsg.direction"><option value="A_to_B">A → B</option><option value="B_to_A">B → A</option></select></div>
+              <div class="form-group" style="flex:3"><label>消息内容</label><input v-model="manualMsg.text" placeholder="输入消息..." @keyup.enter="sendMessage"></div>
+            </div>
+            <button class="btn btn-primary" @click="sendMessage">发送</button>
+            <p v-if="pair.status!=='running'" class="hint" style="color:var(--warning)">配对未运行, 无法发送消息</p>
+          </div>
+        </div>
+
+        <!-- Queue -->
+        <div v-if="tab==='queue'">
+          <div class="card">
+            <div class="card-title">
+              <span class="flex"><span class="icon" v-html="ic('i-queue')"></span> 发送队列与连接状态</span>
+              <div class="flex gap-8">
+                <label class="toggle"><input type="checkbox" v-model="queueAuto" @change="toggleQueueAuto"><span class="switch"></span> 自动刷新</label>
+                <button class="btn btn-sm btn-outline" @click="loadQueue"><span class="icon" v-html="ic('i-refresh')"></span> 刷新</button>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>账号A 连接状态</label>
+                <p :class="queue.client_a_ready?'health-ok':'health-bad'">{{ queue.client_a_ready?'正常':'异常/未就绪' }}</p>
+                <p class="hint" v-if="queue.client_a_error" style="color:var(--error)">{{ queue.client_a_error }}</p>
+                <p class="hint">最近收到: {{ fmtTime(queue.client_a_last_recv) }} · 最近发送: {{ fmtTime(queue.client_a_last_send) }}</p>
+              </div>
+              <div class="form-group">
+                <label>账号B 连接状态</label>
+                <p :class="queue.client_b_ready?'health-ok':'health-bad'">{{ queue.client_b_ready?'正常':'异常/未就绪' }}</p>
+                <p class="hint" v-if="queue.client_b_error" style="color:var(--error)">{{ queue.client_b_error }}</p>
+                <p class="hint">最近收到: {{ fmtTime(queue.client_b_last_recv) }} · 最近发送: {{ fmtTime(queue.client_b_last_send) }}</p>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <h4 class="mb-8">待发队列 ({{ queue.outbox_size||0 }} 条)</h4>
+            <p class="hint mb-16">网络等临时失败会自动退避重试。遇到 iLink 连续下行窗口限制时，消息会保持排队、不计重试；仅在目标账号收到新消息或发送刷新命令后冲刷。</p>
+            <div v-if="(queue.outbox||[]).length===0" class="empty"><div class="icon" v-html="ic('i-queue')"></div><p>队列为空, 所有消息均已送达</p></div>
+            <div v-for="(q,i) in (queue.outbox||[])" :key="i" class="queue-item">
+              <div class="flex-between">
+                <strong>→ {{ q.target }}</strong>
+                <span class="badge badge-queued">{{ q.waiting_reason?'等待对方入站':'重试 '+q.attempts+' 次' }}</span>
+              </div>
+              <p class="mt-8">{{ q.text }}</p>
+              <p class="hint" v-if="q.waiting_reason" style="color:var(--warning)">{{ q.waiting_reason }}</p>
+              <p class="hint" v-if="q.last_error" :style="{color:q.waiting_reason?'var(--muted)':'var(--error)'}">原因: {{ q.last_error }}</p>
+              <p class="hint">入队时间: {{ q.enqueued_at }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Logs -->
+        <div v-if="tab==='logs'">
+          <div class="card">
+            <div class="card-title">
+              <span class="flex"><span class="icon" v-html="ic('i-log')"></span> 系统日志</span>
+              <div class="flex gap-8">
+                <label class="toggle"><input type="checkbox" v-model="autoRefresh" @change="toggleAutoRefresh"><span class="switch"></span> 自动刷新</label>
+                <button class="btn btn-sm btn-outline" @click="loadLogs"><span class="icon" v-html="ic('i-refresh')"></span></button>
+              </div>
+            </div>
+            <div v-if="logs.length===0" class="empty"><div class="icon" v-html="ic('i-log')"></div><p>暂无日志</p></div>
+            <table v-else>
+              <thead><tr><th>时间</th><th>级别</th><th>消息</th></tr></thead>
+              <tbody>
+                <tr v-for="l in logs" :key="l.id">
+                  <td class="small">{{ l.timestamp }}</td>
+                  <td><span class="badge" :class="l.level==='ERROR'?'badge-error':l.level==='WARNING'?'badge-paused':'badge-info'">{{ l.level }}</span></td>
+                  <td>{{ l.message }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Quiet Hours -->
+        <div v-if="tab==='quiet'">
+          <div class="card">
+            <div class="card-title"><span class="flex"><span class="icon" v-html="ic('i-moon')"></span> 静默时段</span></div>
+            <p class="muted small mb-16">在设定时间段内, 消息照常转发但跳过AI自动回复</p>
+            <label class="toggle mb-16"><input type="checkbox" v-model="quietCfg.enabled"><span class="switch"></span> 启用静默时段</label>
+            <div class="form-row">
+              <div class="form-group"><label>开始时间</label><input type="time" v-model="quietCfg.start_time"></div>
+              <div class="form-group"><label>结束时间</label><input type="time" v-model="quietCfg.end_time"></div>
+            </div>
+            <button class="btn btn-primary" @click="saveQuiet">保存</button>
+          </div>
+        </div>
+
+        <!-- Pair Settings -->
+        <div v-if="tab==='settings'">
+          <div class="card">
+            <div class="card-title">配对设置</div>
+            <div class="form-group"><label>配对名称</label><input v-model="pair.name"></div>
+            <div class="form-group"><label>描述</label><input v-model="pair.description"></div>
+            <div class="form-row">
+              <div class="form-group"><label>消息方向</label><select v-model="pair.direction"><option value="bidirectional">双向 (A↔B)</option><option value="a_to_b">A→B 单向</option><option value="b_to_a">B→A 单向</option></select></div>
+              <div class="form-group"><label>AI 触发方</label>
+                <select v-model="pair.ai_trigger_side">
+                  <option value="B">B 触发 → AI回复给B, 合并同步给A</option>
+                  <option value="A">A 触发 → AI回复给A, 合并同步给B</option>
+                </select>
+              </div>
+            </div>
+            <label class="toggle mb-16"><input type="checkbox" v-model="pair.ai_enabled"><span class="switch"></span> 启用 AI 自动回复</label>
+              <label class="toggle mb-16"><input type="checkbox" v-model="pair.auto_start"><span class="switch"></span> 实例启动后自动启动此配对</label>
+            <div class="form-row">
+              <div class="form-group"><label>刷新发送窗口命令</label><input v-model="pair.refresh_window_command" placeholder="，，"><span class="hint">精确匹配；仅冲刷发给命令发送者的队列，不转发、不触发 AI。</span></div>
+              <div class="form-group"><label>每窗口最大连续下行条数</label><input type="number" v-model.number="pair.max_consecutive_downlinks" min="1" max="8"><span class="hint">建议保持 8，低于微信约 10 条的限制。</span></div>
+            </div>
+            <div class="flow-box mb-16">
+              <strong>消息流向：</strong><br>
+              触发方(={{pair.ai_trigger_side||'B'}})发消息 → 正常转发给非触发方 + 触发AI<br>
+              AI以【非触发方】口吻生成回复 → 分条发给触发方<br>
+              合并版【第1条】【第2条】→ 同步给非触发方<br>
+              非触发方发消息 → 取消待执行的AI（非触发方亲自回复了）<br>
+              <span class="muted">AI上下文：触发方说的话=user，非触发方说的话=assistant</span>
+            </div>
+            <button class="btn btn-primary" @click="savePairSettings">保存设置</button>
+          </div>
+          <div class="card">
+            <div class="card-title" style="color:var(--error)">危险操作</div>
+            <div class="flex gap-8">
+              <button class="btn btn-outline" @click="clonePair(pair.id)"><span class="icon" v-html="ic('i-clone')"></span> 克隆此配对</button>
+              <button class="btn btn-danger" @click="deletePair(pair.id)"><span class="icon" v-html="ic('i-trash')"></span> 删除配对</button>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ================= AI Models ================= -->
+      <template v-if="page==='ai-models'">
+        <div class="flex-between mb-16">
+          <h2>AI 模型</h2>
+          <button class="btn btn-primary" @click="openAiModel()"><span class="icon" v-html="ic('i-plus')"></span> 新建模型</button>
+        </div>
+        <div v-if="aiModelEdit" class="card">
+          <div class="card-title">{{ aiModelEdit.id?'编辑模型':'新建模型' }}</div>
+          <div class="form-group"><label>快速预设</label>
+            <select @change="applyAiPreset($event)">
+              <option value="">— 选择预设或手动填写 —</option>
+              <option v-for="(p,i) in aiPresets" :key="i" :value="i">{{ p.name }}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>名称</label><input v-model="aiModelEdit.name" placeholder="如：DeepSeek 主账号"></div>
+            <div class="form-group"><label>Provider</label><input v-model="aiModelEdit.provider"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>模型名称</label><input v-model="aiModelEdit.model"></div>
+            <div class="form-group"><label>API Base URL</label><input v-model="aiModelEdit.base_url"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>API Key</label><input v-model="aiModelEdit.api_key" type="password" :placeholder="aiModelEdit.api_key_masked||'输入 API Key'"></div>
+            <div class="form-group"><label>Max Tokens</label><input type="number" v-model.number="aiModelEdit.max_tokens"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>Temperature: {{ aiModelEdit.temperature }}</label><input type="range" v-model.number="aiModelEdit.temperature" min="0" max="2" step="0.05"></div>
+            <div class="form-group"><label>AI 延迟 (秒): {{ aiModelEdit.ai_delay }}</label><input type="range" v-model.number="aiModelEdit.ai_delay" min="0" max="30" step="0.5"></div>
+          </div>
+          <div class="form-group"><label>系统提示词 (System Prompt)</label><textarea v-model="aiModelEdit.system_prompt" rows="4"></textarea></div>
+          <div class="flex gap-12" style="flex-wrap:wrap">
+            <label class="toggle"><input type="checkbox" v-model="aiModelEdit.force_split"><span class="switch"></span> 分条发送</label>
+            <label class="toggle"><input type="checkbox" v-model="aiModelEdit.emotion_aware"><span class="switch"></span> 情绪感知</label>
+            <label class="toggle"><input type="checkbox" v-model="aiModelEdit.rag_enabled"><span class="switch"></span> RAG 检索</label>
+            <label class="toggle"><input type="checkbox" v-model="aiModelEdit.tools_enabled"><span class="switch"></span> 工具调用</label>
+          </div>
+          <div class="form-group mt-16" v-if="aiModelEdit.force_split"><label>分条最大长度: {{ aiModelEdit.split_max_len }}</label><input type="range" v-model.number="aiModelEdit.split_max_len" min="5" max="50" step="1"></div>
+          <div class="flex gap-8 mt-16">
+            <button class="btn btn-primary" @click="saveAiModel">保存</button>
+            <button v-if="aiModelEdit.id" class="btn btn-outline" @click="testAiModel(aiModelEdit.id)">测试连接</button>
+            <button class="btn btn-outline" @click="aiModelEdit=null">取消</button>
+            <button v-if="aiModelEdit.id" class="btn btn-danger" @click="deleteAiModel(aiModelEdit.id)">删除</button>
+          </div>
+        </div>
+        <div v-if="!aiModelEdit" class="resource-grid">
+          <div v-for="m in aiModels" :key="m.id" class="resource-card" @click="openAiModel(m)">
+            <h4>{{ m.name }}</h4>
+            <p>{{ m.provider }} / {{ m.model }}</p>
+            <div class="meta">temp {{ m.temperature }} · {{ m.force_split?'分条':'整段' }} · API Key {{ m.api_key_masked?'已配置':'未配置' }}</div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ================= Personas ================= -->
+      <template v-if="page==='personas'">
+        <div class="flex-between mb-16">
+          <h2>人格 / 角色卡</h2>
+          <button class="btn btn-primary" @click="openPersona()"><span class="icon" v-html="ic('i-plus')"></span> 新建人格</button>
+        </div>
+        <div v-if="personaEdit" class="card">
+          <div class="card-title">{{ personaEdit.id?'编辑人格':'新建人格' }}</div>
+          <div class="form-row">
+            <div class="form-group"><label>名称</label><input v-model="personaEdit.name" placeholder="如：小甜心"></div>
+            <div class="form-group"><label>标签</label><input v-model="newTag" @keyup.enter="addTag" placeholder="输入后回车添加"></div>
+          </div>
+          <div class="tag-list mb-16"><span v-for="(t,i) in (personaEdit.tags||[])" :key="i" class="tag-item">{{ t }} <span class="remove" @click="personaEdit.tags.splice(i,1)">&times;</span></span></div>
+          <div class="form-group"><label>角色描述</label><textarea v-model="personaEdit.description" rows="3"></textarea></div>
+          <div class="form-group">
+            <label>性格特征</label>
+            <div class="tag-list mb-16"><span v-for="(p,i) in (personaEdit.personality||[])" :key="i" class="tag-item">{{ p }} <span class="remove" @click="personaEdit.personality.splice(i,1)">&times;</span></span></div>
+            <div class="flex gap-8"><input v-model="newPersonality" placeholder="如：温柔" @keyup.enter="addPersonality" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px"><button class="btn btn-sm btn-outline" @click="addPersonality">+ 添加</button></div>
+          </div>
+          <div class="form-group"><label>场景设定</label><textarea v-model="personaEdit.scenario" rows="2"></textarea></div>
+          <div class="form-group"><label>第一条消息</label><textarea v-model="personaEdit.first_mes" rows="2"></textarea></div>
+          <div class="form-group">
+            <label>示例对话 (Few-shot)</label>
+            <div v-for="(d,i) in (personaEdit.example_dialogs||[])" :key="i" class="dialog-item">
+              <div class="flex-between"><span class="role">对话 {{ i+1 }}</span><button class="btn btn-sm btn-danger" @click="personaEdit.example_dialogs.splice(i,1)">删除</button></div>
+              <div class="role mt-8">对方:</div><div class="text">{{ d.user }}</div>
+              <div class="role mt-8">你:</div><div class="text">{{ d.assistant }}</div>
+            </div>
+            <div class="mt-16">
+              <input v-model="newDialogUser" placeholder="对方说的话" class="mb-8" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px">
+              <input v-model="newDialogAssistant" placeholder="你的回复" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px">
+              <button class="btn btn-sm btn-outline" @click="addDialog">+ 添加对话</button>
+            </div>
+          </div>
+          <div class="form-group"><label>额外规则</label><textarea v-model="personaEdit.system_prompt_extra" rows="2"></textarea></div>
+          <div class="flex gap-8" style="flex-wrap:wrap">
+            <button class="btn btn-primary" @click="savePersona">保存</button>
+            <button v-if="personaEdit.id" class="btn btn-outline" @click="downloadTemplate('persona')"><span class="icon" v-html="ic('i-down')"></span> 下载模板</button>
+            <button v-if="personaEdit.id" class="btn btn-outline" @click="showImport=showImport==='persona'?'':'persona'"><span class="icon" v-html="ic('i-up')"></span> 批量导入</button>
+            <button class="btn btn-outline" @click="personaEdit=null">取消</button>
+            <button v-if="personaEdit.id" class="btn btn-danger" @click="deletePersona(personaEdit.id)">删除</button>
+          </div>
+          <div v-if="showImport==='persona'" class="mt-16">
+            <p class="hint mb-8">把下载的模板发给本地 AI 填写, 将返回的 JSON(或带```json的Markdown)粘贴到下面:</p>
+            <textarea v-model="importText" rows="8" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;font-family:monospace"></textarea>
+            <button class="btn btn-primary mt-8" @click="doImport('persona')">确认导入</button>
+          </div>
+        </div>
+        <div v-if="!personaEdit" class="resource-grid">
+          <div v-for="p in personas" :key="p.id" class="resource-card" @click="openPersona(p)">
+            <h4>{{ p.name }}</h4>
+            <p>{{ (p.description||'无描述').slice(0,60) }}</p>
+            <div class="meta">{{ (p.personality||[]).length }} 个性格 · {{ (p.example_dialogs||[]).length }} 条示例</div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ================= Worldbooks ================= -->
+      <template v-if="page==='worldbooks'">
+        <div class="flex-between mb-16">
+          <h2>世界书</h2>
+          <button class="btn btn-primary" @click="openWorldbook()"><span class="icon" v-html="ic('i-plus')"></span> 新建世界书</button>
+        </div>
+        <div v-if="worldbookEdit" class="card">
+          <div class="card-title">{{ worldbookEdit.id?'编辑世界书':'新建世界书' }}</div>
+          <div class="form-row">
+            <div class="form-group"><label>名称</label><input v-model="worldbookEdit.name"></div>
+            <div class="form-group"><label>描述</label><input v-model="worldbookEdit.description"></div>
+          </div>
+          <template v-if="worldbookEdit.id">
+            <h4 class="mb-8">条目 ({{ (worldbookEdit.entries||[]).length }})</h4>
+            <div class="form-row">
+              <div class="form-group" style="flex:2"><label>触发关键词</label><input v-model="newWb.key" placeholder="如：生日"></div>
+              <div class="form-group" style="flex:1"><label>优先级</label><input type="number" v-model.number="newWb.priority"></div>
+            </div>
+            <div class="form-group"><label>内容</label><textarea v-model="newWb.content" rows="2"></textarea></div>
+            <button class="btn btn-sm btn-primary mb-16" @click="addWbEntry">+ 添加条目</button>
+            <div v-for="e in (worldbookEdit.entries||[])" :key="e.id" class="dialog-item">
+              <div class="flex-between">
+                <div><strong>{{ e.key }}</strong> <span class="badge badge-info">优先级 {{ e.priority }}</span> <span v-if="!e.enabled" class="badge badge-stopped">已禁用</span></div>
+                <div class="flex gap-8">
+                  <label class="toggle"><input type="checkbox" :checked="e.enabled" @change="toggleWbEntry(e)"><span class="switch"></span></label>
+                  <button class="btn btn-sm btn-danger" @click="deleteWbEntry(e.id)">删除</button>
+                </div>
+              </div>
+              <p class="mt-8">{{ e.content }}</p>
+            </div>
+          </template>
+          <div class="flex gap-8 mt-16" style="flex-wrap:wrap">
+            <button class="btn btn-primary" @click="saveWorldbook">保存</button>
+            <button v-if="worldbookEdit.id" class="btn btn-outline" @click="downloadTemplate('worldbook')"><span class="icon" v-html="ic('i-down')"></span> 下载模板</button>
+            <button v-if="worldbookEdit.id" class="btn btn-outline" @click="showImport=showImport==='worldbook'?'':'worldbook'"><span class="icon" v-html="ic('i-up')"></span> 批量导入</button>
+            <button class="btn btn-outline" @click="worldbookEdit=null">取消</button>
+            <button v-if="worldbookEdit.id" class="btn btn-danger" @click="deleteWorldbook(worldbookEdit.id)">删除</button>
+          </div>
+          <div v-if="showImport==='worldbook'" class="mt-16">
+            <p class="hint mb-8">导入会<strong>替换</strong>当前所有条目。粘贴 AI 填写的 JSON:</p>
+            <textarea v-model="importText" rows="8" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;font-family:monospace"></textarea>
+            <button class="btn btn-primary mt-8" @click="doImport('worldbook')">确认导入</button>
+          </div>
+        </div>
+        <div v-if="!worldbookEdit" class="resource-grid">
+          <div v-for="wb in worldbooks" :key="wb.id" class="resource-card" @click="openWorldbook(wb)">
+            <h4>{{ wb.name }}</h4>
+            <p>{{ wb.description||'无描述' }}</p>
+          </div>
+        </div>
+      </template>
+
+      <!-- ================= Keyword Sets ================= -->
+      <template v-if="page==='keyword-sets'">
+        <div class="flex-between mb-16">
+          <h2>关键词集</h2>
+          <button class="btn btn-primary" @click="openKeywordSet()"><span class="icon" v-html="ic('i-plus')"></span> 新建关键词集</button>
+        </div>
+        <div v-if="keywordSetEdit" class="card">
+          <div class="card-title">{{ keywordSetEdit.id?'编辑关键词集':'新建关键词集' }}</div>
+          <p class="muted small mb-16">消息包含关键词时直接回复, 不经过 AI</p>
+          <div class="form-row">
+            <div class="form-group"><label>名称</label><input v-model="keywordSetEdit.name"></div>
+            <div class="form-group"><label>描述</label><input v-model="keywordSetEdit.description"></div>
+          </div>
+          <template v-if="keywordSetEdit.id">
+            <h4 class="mb-8">规则 ({{ (keywordSetEdit.rules||[]).length }})</h4>
+            <div class="form-row">
+              <div class="form-group" style="flex:1"><label>关键词</label><input v-model="newKw.keyword" placeholder="如：在吗"></div>
+              <div class="form-group" style="flex:2"><label>回复内容</label><input v-model="newKw.reply" placeholder="如：在的在的~"></div>
+            </div>
+            <button class="btn btn-sm btn-primary mb-16" @click="addKwRule">+ 添加规则</button>
+            <div v-for="r in (keywordSetEdit.rules||[])" :key="r.id" class="dialog-item">
+              <div class="flex-between">
+                <div><strong>{{ r.keyword }}</strong> → {{ r.reply }} <span v-if="!r.enabled" class="badge badge-stopped">已禁用</span></div>
+                <div class="flex gap-8">
+                  <label class="toggle"><input type="checkbox" :checked="r.enabled" @change="toggleKwRule(r)"><span class="switch"></span></label>
+                  <button class="btn btn-sm btn-danger" @click="deleteKwRule(r.id)">删除</button>
+                </div>
+              </div>
+            </div>
+          </template>
+          <div class="flex gap-8 mt-16" style="flex-wrap:wrap">
+            <button class="btn btn-primary" @click="saveKeywordSet">保存</button>
+            <button v-if="keywordSetEdit.id" class="btn btn-outline" @click="downloadTemplate('keyword-set')"><span class="icon" v-html="ic('i-down')"></span> 下载模板</button>
+            <button v-if="keywordSetEdit.id" class="btn btn-outline" @click="showImport=showImport==='keyword-set'?'':'keyword-set'"><span class="icon" v-html="ic('i-up')"></span> 批量导入</button>
+            <button class="btn btn-outline" @click="keywordSetEdit=null">取消</button>
+            <button v-if="keywordSetEdit.id" class="btn btn-danger" @click="deleteKeywordSet(keywordSetEdit.id)">删除</button>
+          </div>
+          <div v-if="showImport==='keyword-set'" class="mt-16">
+            <p class="hint mb-8">导入会<strong>替换</strong>当前所有规则。粘贴 AI 填写的 JSON:</p>
+            <textarea v-model="importText" rows="8" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;font-family:monospace"></textarea>
+            <button class="btn btn-primary mt-8" @click="doImport('keyword-set')">确认导入</button>
+          </div>
+        </div>
+        <div v-if="!keywordSetEdit" class="resource-grid">
+          <div v-for="ks in keywordSets" :key="ks.id" class="resource-card" @click="openKeywordSet(ks)">
+            <h4>{{ ks.name }}</h4>
+            <p>{{ ks.description||'无描述' }}</p>
+          </div>
+        </div>
+      </template>
+
+      <!-- ================= Tool Trigger Sets ================= -->
+      <template v-if="page==='tool-sets'">
+        <div class="flex-between mb-16">
+          <div><h2>工具触发词</h2><p class="muted small">命中触发词后调用指定工具，再由配对当前人格整理成自然回复。</p></div>
+          <button class="btn btn-primary" @click="openToolSet()"><span class="icon" v-html="ic('i-plus')"></span> 新建工具集</button>
+        </div>
+        <div v-if="toolSetEdit" class="card">
+          <div class="card-title">{{ toolSetEdit.id?'编辑工具触发词集':'新建工具触发词集' }}</div>
+          <div class="form-row"><div class="form-group"><label>名称</label><input v-model="toolSetEdit.name"></div><div class="form-group"><label>描述</label><input v-model="toolSetEdit.description"></div></div>
+          <template v-if="toolSetEdit.id">
+            <h4 class="mb-8">规则 ({{ (toolSetEdit.rules||[]).length }})</h4>
+            <div class="form-row">
+              <div class="form-group"><label>调用工具</label><select v-model="newToolRule.tool_name"><option v-for="tool in toolsCatalog" :key="tool.name" :value="tool.name">{{ tool.label }}</option></select></div>
+              <div class="form-group" style="flex:2"><label>触发词（用逗号分隔）</label><input v-model="newToolRule.triggersText" placeholder="如：查一下, 搜索"></div>
+              <div class="form-group"><label>匹配方式</label><select v-model="newToolRule.match_mode"><option value="prefix">前缀匹配</option><option value="contains">包含匹配</option></select></div>
+            </div>
+            <p class="hint mb-8">前缀匹配示例：<code>天气 上海</code>，系统会把“上海”传给天气工具。工具只可从内置目录选择，不能执行任意脚本或网址。</p>
+            <button class="btn btn-sm btn-primary mb-16" @click="addToolRule">+ 添加工具规则</button>
+            <div v-for="r in (toolSetEdit.rules||[])" :key="r.id" class="dialog-item"><div class="flex-between"><div><strong>{{ toolLabel(r.tool_name) }}</strong> <span class="muted">{{ r.match_mode==='prefix'?'前缀':'包含' }}</span><br><span class="small">触发词：{{ (r.triggers||[]).join('、') }}</span><span v-if="!r.enabled" class="badge badge-stopped">已禁用</span></div><div class="flex gap-8"><label class="toggle"><input type="checkbox" :checked="r.enabled" @change="toggleToolRule(r)"><span class="switch"></span></label><button class="btn btn-sm btn-danger" @click="deleteToolRule(r.id)">删除</button></div></div></div>
+          </template>
+          <div class="flex gap-8 mt-16"><button class="btn btn-primary" @click="saveToolSet">保存</button><button class="btn btn-outline" @click="toolSetEdit=null">取消</button><button v-if="toolSetEdit.id" class="btn btn-danger" @click="deleteToolSet(toolSetEdit.id)">删除</button></div>
+        </div>
+        <div v-if="!toolSetEdit" class="resource-grid"><div v-for="ts in toolSets" :key="ts.id" class="resource-card" @click="openToolSet(ts)"><h4>{{ ts.name }}</h4><p>{{ ts.description||'无描述' }}</p></div></div>
+      </template>
+
+      <!-- ================= Media Library ================= -->
+      <template v-if="page==='media-library'">
+        <div class="flex-between mb-16">
+          <div><h2>媒体库</h2><p class="muted small">所有收到及成功转发的图片、视频、文件、原始 Silk 与转码 MP3 均保存在持久化数据卷。</p></div>
+          <button class="btn btn-outline" @click="loadMediaLibrary"><span class="icon" v-html="ic('i-refresh')"></span> 刷新</button>
+        </div>
+        <div class="card">
+          <p class="muted small mb-16">共 {{ mediaTotal }} 条文件索引；图片和常见音频可在线预览，其他格式仍可下载。</p>
+          <div v-if="mediaItems.length===0" class="empty"><div class="icon" v-html="ic('i-msg')"></div><p>暂无归档媒体</p></div>
+          <table v-else>
+            <thead><tr><th>时间</th><th>账号</th><th>方向</th><th>类型</th><th>文件</th><th>大小</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="m in mediaItems" :key="m.file">
+                <td class="small">{{ m.timestamp }}</td><td>{{ m.account }}</td><td>{{ m.direction==='inbound'?'收到':'已转发' }}</td><td>{{ m.media_type }}</td><td class="small">{{ m.original_name||m.file }}</td><td>{{ mediaSize(m.bytes) }}</td>
+                <td><div class="flex gap-8"><button class="btn btn-sm btn-primary" @click="previewMedia(m)">预览</button><button class="btn btn-sm btn-outline" @click="downloadMedia(m)">下载</button></div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-if="mediaPreview.open" class="media-preview-mask" @click.self="closeMediaPreview">
+          <div class="media-preview">
+            <div class="flex-between"><strong>{{ mediaPreview.name }}</strong><button class="btn btn-sm btn-outline" @click="closeMediaPreview">关闭</button></div>
+            <img v-if="mediaPreview.kind==='image'" :src="mediaPreview.url" :alt="mediaPreview.name">
+            <audio v-else-if="mediaPreview.kind==='audio'" controls autoplay :src="mediaPreview.url"></audio>
+            <div v-else class="unsupported">此格式无法在浏览器直接预览。原始 Silk 语音请下载，或选择同名的 MP3 转码文件播放。</div>
+            <div class="flex gap-8"><button class="btn btn-outline" @click="downloadMedia(mediaPreview.item)">下载文件</button></div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ================= Settings ================= -->
+      <template v-if="page==='settings'">
+        <h2 style="margin-bottom:20px">系统设置</h2>
+        <div class="card">
+          <div class="card-title">修改管理员密码</div>
+          <div class="form-group"><label>原密码</label><input v-model="pwForm.old_password" type="password"></div>
+          <div class="form-group"><label>新密码</label><input v-model="pwForm.new_password" type="password"></div>
+          <button class="btn btn-primary" @click="changePassword">修改密码</button>
+        </div>
+        <div class="card">
+          <div class="card-title">系统更新</div>
+          <div class="form-group">
+            <label>更新源 URL (couple-relay-web.tar.gz 的下载地址)</label>
+            <input v-model="sysCfg.update_url" placeholder="如: https://example.com/couple-relay-web.tar.gz">
+            <p class="hint">填写后点击「立即更新」会从该地址下载新版并自动重启。也可以直接上传更新包。</p>
+          </div>
+          <div class="flex gap-8" style="flex-wrap:wrap">
+            <button class="btn btn-primary" @click="saveSysCfg">保存更新源</button>
+            <button class="btn btn-warning" @click="doUpdate"><span class="icon" v-html="ic('i-refresh')"></span> 立即更新</button>
+            <label class="btn btn-outline" style="margin:0">
+              <span class="icon" v-html="ic('i-up')"></span> 上传更新包
+              <input type="file" accept=".tar.gz,.tgz" style="display:none" @change="uploadUpdate">
+            </label>
+          </div>
+          <p class="hint mt-8" v-if="updating" style="color:var(--warning)">更新任务已提交，正在等待独立更新器构建并重启服务...</p>
+          <p class="hint mt-8" v-if="updateStatus.message" :style="{color: updateStatus.status==='failed' ? 'var(--danger)' : (updateStatus.status==='success' ? 'var(--success)' : 'var(--warning)')}">
+            更新状态：{{ updateStatus.message }} <button class="btn btn-sm btn-outline" @click="loadUpdateStatus">刷新状态</button>
+          </p>
+        </div>
+        <div class="card">
+          <div class="card-title">系统信息</div>
+          <table>
+            <tr><td class="muted">版本</td><td>Couple Relay Web <span v-text="appVer"></span> <span v-if="appBuild" class="muted" style="font-size:12px">(build {{appBuild}})</span></td></tr>
+            <tr><td class="muted">iLink 接口</td><td>ilinkai.weixin.qq.com</td></tr>
+            <tr><td class="muted">数据库</td><td>SQLite (relay.db)</td></tr>
+            <tr><td class="muted">部署方式</td><td>Docker / Python</td></tr>
+          </table>
+        </div>
+      </template>
+    </main>
+  </div>
+</div>
+
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script>
+const{createApp}=Vue;
+createApp({
+data(){return{
+  token:localStorage.getItem('cr_token')||'',
+  loginPassword:'',loggingIn:false,
+  page:'dashboard',tab:'accounts',
+  toast:{show:false,message:'',type:'info'},
+  dash:{},pairs:[],pair:{},
+  showCreatePair:false,newPairName:'',newPairDesc:'',newPairDir:'bidirectional',newPairTrigger:'B',
+  qrImage:null,qrAccountId:null,qrStatus:'',qrTimer:null,
+  // system resources
+  aiModels:[],aiPresets:[],aiModelEdit:null,
+  personas:[],personaEdit:null,newTag:'',newPersonality:'',newDialogUser:'',newDialogAssistant:'',
+  worldbooks:[],worldbookEdit:null,newWb:{key:'',content:'',priority:0},
+  keywordSets:[],keywordSetEdit:null,newKw:{keyword:'',reply:''},
+  toolSets:[],toolSetEdit:null,toolsCatalog:[],newToolRule:{tool_name:'web_search',triggersText:'',match_mode:'prefix'},
+  showImport:'',importText:'',
+  // pair extras
+  quietCfg:{enabled:false,start_time:'23:00',end_time:'07:00'},
+  messages:[],msgStats:{},msgFilter:'all',manualMsg:{direction:'A_to_B',text:''},
+  logs:[],autoRefresh:false,logTimer:null,
+  queue:{},queueAuto:false,queueTimer:null,
+  mediaItems:[],mediaTotal:0,mediaPreview:{open:false,url:'',kind:'',name:'',item:null},
+  // settings
+  pwForm:{old_password:'',new_password:''},
+  sysCfg:{update_url:''},updating:false,updateStatus:{status:'',message:''},
+  appVer:'',appBuild:'',
+}},
+async mounted(){if(this.token){await this.loadDashboard()}},
+methods:{
+  ic(n){return '<svg><use href="#'+n+'"></use></svg>'},
+  async api(method,url,body,isForm){
+    const opts={method,headers:{}};
+    if(this.token)opts.headers['Authorization']='Bearer '+this.token;
+    if(body&&!isForm){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body)}
+    if(body&&isForm){opts.body=body}
+    try{
+      const r=await fetch(url,opts);
+      if(r.status===401){this.token='';localStorage.removeItem('cr_token');this.toastMsg('登录已过期','error');return null}
+      const d=await r.json();
+      if(!r.ok){this.toastMsg(d.detail||d.message||'操作失败','error');return null}
+      return d;
+    }catch(e){this.toastMsg('网络错误: '+e.message,'error');return null}
+  },
+  toastMsg(msg,type='info'){this.toast={show:true,message:msg,type};setTimeout(()=>this.toast.show=false,3500)},
+  goPage(p){
+    this.page=p;
+    if(p==='dashboard')this.loadDashboard();
+    if(p==='pairs')this.loadPairs();
+    if(p==='ai-models'){this.loadAiModels();this.loadAiPresets()}
+    if(p==='personas')this.loadPersonas();
+    if(p==='worldbooks')this.loadWorldbooks();
+    if(p==='keyword-sets')this.loadKeywordSets();
+    if(p==='tool-sets'){this.loadToolSets();this.loadToolsCatalog()}
+    if(p==='media-library')this.loadMediaLibrary();
+    if(p==='settings'){this.loadSysCfg();this.loadVersion();this.loadUpdateStatus()}
+  },
+  accNick(p,i){return ((p.accounts||[])[i]||{}).nickname||'-'},
+  accStatus(p,i){return ((p.accounts||[])[i]||{}).login_status||'logged_out'},
+  statusShort(s){if(!s)return'sent';if(s==='sent')return'已送达';if(s==='queued')return'队列中';if(s.startsWith('failed'))return'失败';return s},
+  statusBadge(s){if(!s||s==='sent')return'badge-sent';if(s==='queued')return'badge-queued';return'badge-failed'},
+  fmtTime(ts){if(!ts)return'-';const d=new Date(ts*1000);const now=Date.now();const diff=(now-d.getTime())/1000;if(diff<60)return Math.floor(diff)+'秒前';if(diff<3600)return Math.floor(diff/60)+'分钟前';return d.toLocaleString()},
+
+  // ===== Auth =====
+  async doLogin(){
+    if(!this.loginPassword){this.toastMsg('请输入密码','error');return}
+    this.loggingIn=true;
+    const d=await this.api('POST','/api/auth/login',{password:this.loginPassword});
+    this.loggingIn=false;
+    if(d&&d.token){this.token=d.token;localStorage.setItem('cr_token',d.token);this.loginPassword='';this.toastMsg('登录成功','success');await this.loadDashboard()}
+  },
+  async changePassword(){
+    if(!this.pwForm.old_password||!this.pwForm.new_password){this.toastMsg('请填写完整','error');return}
+    const d=await this.api('POST','/api/auth/change-password',this.pwForm);
+    if(d){this.toastMsg('密码已修改','success');this.pwForm={old_password:'',new_password:''}}
+  },
+
+  // ===== Dashboard =====
+  async loadDashboard(){const d=await this.api('GET','/api/dashboard');if(d)this.dash=d},
+  async loadMediaLibrary(){const d=await this.api('GET','/api/media-library?limit=500');if(d){this.mediaItems=d.items||[];this.mediaTotal=d.total||0}},
+  mediaSize(n){n=Number(n)||0;if(n<1024)return n+' B';if(n<1024*1024)return (n/1024).toFixed(1)+' KB';return (n/1024/1024).toFixed(1)+' MB'},
+  mediaKind(m){const n=String((m&&m.file)||'').toLowerCase();if(/\.(jpg|jpeg|png|gif|webp|bmp|avif)$/.test(n))return'image';if(/\.(mp3|wav|ogg|m4a|aac|flac)$/.test(n))return'audio';return'unsupported'},
+  async mediaBlob(m,inline=false){const r=await fetch('/api/media-library/'+encodeURIComponent(m.file)+(inline?'?inline=true':''),{headers:{'Authorization':'Bearer '+this.token}});if(r.status===401){this.token='';localStorage.removeItem('cr_token');this.toastMsg('登录已过期','error');return null}if(!r.ok){let d={};try{d=await r.json()}catch(e){}this.toastMsg(d.detail||'媒体读取失败','error');return null}return await r.blob()},
+  async previewMedia(m){this.closeMediaPreview();const blob=await this.mediaBlob(m,true);if(!blob)return;this.mediaPreview={open:true,url:URL.createObjectURL(blob),kind:this.mediaKind(m),name:m.original_name||m.file,item:m}},
+  closeMediaPreview(){if(this.mediaPreview.url)URL.revokeObjectURL(this.mediaPreview.url);this.mediaPreview={open:false,url:'',kind:'',name:'',item:null}},
+  async downloadMedia(m){if(!m)return;const blob=await this.mediaBlob(m,false);if(!blob)return;const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=m.original_name||m.file;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000)},
+
+  // ===== Pairs =====
+  async loadPairs(){const d=await this.api('GET','/api/pairs');if(d)this.pairs=d.pairs||[]},
+  async createPair(){
+    if(!this.newPairName){this.toastMsg('请输入名称','error');return}
+    const d=await this.api('POST','/api/pairs',{name:this.newPairName,description:this.newPairDesc,direction:this.newPairDir,ai_trigger_side:this.newPairTrigger});
+    if(d){this.toastMsg('创建成功','success');this.showCreatePair=false;this.newPairName='';this.newPairDesc='';await this.loadPairs()}
+  },
+  async openPair(id){
+    this.page='pair';this.tab='accounts';this.qrImage=null;this.stopQrPoll();
+    await this.loadPair(id);
+    await Promise.all([this.loadAiModels(),this.loadPersonas(),this.loadWorldbooks(),this.loadKeywordSets(),this.loadToolSets()]);
+  },
+  async loadPair(id){
+    const d=await this.api('GET','/api/pairs/'+id);
+    if(d){if(!d.ai_trigger_side)d.ai_trigger_side='B';this.pair=d;this.quietCfg=d.quiet_hours||{enabled:false,start_time:'23:00',end_time:'07:00'}}
+  },
+  async startPair(id){const d=await this.api('POST','/api/pairs/'+id+'/start');if(d){this.toastMsg('已启动','success');await this.loadDashboard();await this.loadPairs();if(this.pair.id===id)await this.loadPair(id)}},
+  async stopPair(id){const d=await this.api('POST','/api/pairs/'+id+'/stop');if(d){this.toastMsg('已停止','success');await this.loadDashboard();await this.loadPairs();if(this.pair.id===id)await this.loadPair(id)}},
+  async restartPair(id){this.toastMsg('重启中...','info');const d=await this.api('POST','/api/pairs/'+id+'/restart');if(d){this.toastMsg('已重启','success');await this.loadPair(id)}},
+  async deletePair(id){if(!confirm('确定删除此配对? 所有配置和消息记录将丢失!'))return;const d=await this.api('DELETE','/api/pairs/'+id);if(d){this.toastMsg('已删除','success');this.goPage('pairs')}},
+  async clonePair(id){const d=await this.api('POST','/api/pairs/'+id+'/clone');if(d){this.toastMsg('克隆成功','success');await this.loadPairs()}},
+  async savePairSettings(){
+    const d=await this.api('PUT','/api/pairs/'+this.pair.id,{name:this.pair.name,description:this.pair.description,direction:this.pair.direction,ai_enabled:this.pair.ai_enabled,ai_trigger_side:this.pair.ai_trigger_side,auto_start:this.pair.auto_start,refresh_window_command:this.pair.refresh_window_command,max_consecutive_downlinks:this.pair.max_consecutive_downlinks});
+    if(d)this.toastMsg('设置已保存','success');
+  },
+  async savePairResources(){
+    const d=await this.api('PUT','/api/pairs/'+this.pair.id,{ai_model_id:this.pair.ai_model_id,persona_id:this.pair.persona_id,worldbook_id:this.pair.worldbook_id,keyword_set_id:this.pair.keyword_set_id,tool_set_id:this.pair.tool_set_id,vision_model_id:this.pair.vision_model_id});
+    if(d){this.toastMsg('资源引用已保存','success');await this.loadPair(this.pair.id)}
+  },
+
+  // ===== Accounts =====
+  async updateAccount(acc){const d=await this.api('PUT','/api/accounts/'+acc.id,{nickname:acc.nickname});if(d)this.toastMsg('已更新','success')},
+  async startQrLogin(accId){
+    this.qrAccountId=accId;this.qrStatus='wait';this.qrImage=null;
+    const d=await this.api('POST','/api/accounts/'+accId+'/qr-login');
+    if(d&&d.qr_image){this.qrImage=d.qr_image;this.startQrPoll(accId)}else{this.toastMsg('获取二维码失败','error')}
+  },
+  startQrPoll(accId){
+    this.qrTimer=setInterval(async()=>{
+      const d=await this.api('GET','/api/accounts/'+accId+'/qr-status');
+      if(d){this.qrStatus=d.status;if(d.status==='confirmed'){this.stopQrPoll();this.toastMsg('登录成功!','success');await this.loadPair(this.pair.id)}else if(d.status==='expired'){this.stopQrPoll();this.toastMsg('二维码过期','error')}}
+    },2000);
+  },
+  stopQrPoll(){if(this.qrTimer){clearInterval(this.qrTimer);this.qrTimer=null}},
+  async logoutAccount(accId){if(!confirm('确定登出此账号?'))return;const d=await this.api('POST','/api/accounts/'+accId+'/logout');if(d){this.toastMsg('已登出','success');await this.loadPair(this.pair.id)}},
+
+  // ===== AI Models =====
+  async loadAiModels(){const d=await this.api('GET','/api/ai-models');if(d)this.aiModels=d.models||[]},
+  async loadAiPresets(){const d=await this.api('GET','/api/ai-models/presets');if(d)this.aiPresets=d.presets||[]},
+  openAiModel(m){
+    if(m){this.aiModelEdit={...m,api_key:''}}
+    else{this.aiModelEdit={name:'',provider:'deepseek',model:'deepseek-chat',api_key:'',base_url:'https://api.deepseek.com',temperature:0.8,max_tokens:500,system_prompt:'',ai_delay:4.0,context_length:20,force_split:true,split_max_len:15,emotion_aware:true,rag_enabled:true,tools_enabled:true}}
+  },
+  applyAiPreset(e){
+    const i=e.target.value;if(i==='')return;
+    const p=this.aiPresets[i];if(!p)return;
+    this.aiModelEdit.provider=p.provider;this.aiModelEdit.model=p.model;this.aiModelEdit.base_url=p.base_url;
+  },
+  async saveAiModel(){
+    const e=this.aiModelEdit;
+    if(!e.name){this.toastMsg('请填写名称','error');return}
+    const data={...e};delete data.id;delete data.api_key_masked;delete data.created_at;delete data.updated_at;
+    if(!data.api_key)delete data.api_key;
+    let d;
+    if(e.id){d=await this.api('PUT','/api/ai-models/'+e.id,data)}
+    else{d=await this.api('POST','/api/ai-models',data)}
+    if(d){this.toastMsg('已保存','success');this.aiModelEdit=null;await this.loadAiModels()}
+  },
+  async testAiModel(id){this.toastMsg('测试中...','info');const d=await this.api('POST','/api/ai-models/'+id+'/test');if(d){this.toastMsg(d.message,d.status==='ok'?'success':'error')}},
+  async deleteAiModel(id){if(!confirm('确定删除此模型?'))return;const d=await this.api('DELETE','/api/ai-models/'+id);if(d){this.toastMsg('已删除','success');this.aiModelEdit=null;await this.loadAiModels()}},
+
+  // ===== Personas =====
+  async loadPersonas(){const d=await this.api('GET','/api/personas');if(d)this.personas=d.personas||[]},
+  openPersona(p){
+    if(p){this.personaEdit={...p};if(!this.personaEdit.personality)this.personaEdit.personality=[];if(!this.personaEdit.example_dialogs)this.personaEdit.example_dialogs=[];if(!this.personaEdit.tags)this.personaEdit.tags=[]}
+    else{this.personaEdit={name:'',description:'',personality:[],scenario:'',first_mes:'',example_dialogs:[],system_prompt_extra:'',tags:[]}}
+    this.showImport='';this.importText='';
+  },
+  addPersonality(){if(this.newPersonality){this.personaEdit.personality.push(this.newPersonality);this.newPersonality=''}},
+  addTag(){if(this.newTag){this.personaEdit.tags.push(this.newTag);this.newTag=''}},
+  addDialog(){if(this.newDialogUser&&this.newDialogAssistant){this.personaEdit.example_dialogs.push({user:this.newDialogUser,assistant:this.newDialogAssistant});this.newDialogUser='';this.newDialogAssistant=''}},
+  async savePersona(){
+    const e=this.personaEdit;
+    if(!e.name){this.toastMsg('请填写名称','error');return}
+    const data={name:e.name,description:e.description,personality:e.personality,scenario:e.scenario,first_mes:e.first_mes,example_dialogs:e.example_dialogs,system_prompt_extra:e.system_prompt_extra,tags:e.tags};
+    let d;
+    if(e.id){d=await this.api('PUT','/api/personas/'+e.id,data)}
+    else{d=await this.api('POST','/api/personas',data)}
+    if(d){this.toastMsg('已保存','success');if(!e.id&&d.persona_id){await this.loadPersonas();const p=this.personas.find(x=>x.id===d.persona_id);if(p)this.openPersona(p)}else{this.personaEdit=null;await this.loadPersonas()}}
+  },
+  async deletePersona(id){if(!confirm('确定删除此人格?'))return;const d=await this.api('DELETE','/api/personas/'+id);if(d){this.toastMsg('已删除','success');this.personaEdit=null;await this.loadPersonas()}},
+
+  // ===== Worldbooks =====
+  async loadWorldbooks(){const d=await this.api('GET','/api/worldbooks');if(d)this.worldbooks=d.worldbooks||[]},
+  async openWorldbook(wb){
+    if(wb){const d=await this.api('GET','/api/worldbooks/'+wb.id);this.worldbookEdit=d||{...wb,entries:[]}}
+    else{this.worldbookEdit={name:'',description:'',entries:[]}}
+    this.showImport='';this.importText='';
+  },
+  async saveWorldbook(){
+    const e=this.worldbookEdit;
+    if(!e.name){this.toastMsg('请填写名称','error');return}
+    let d;
+    if(e.id){d=await this.api('PUT','/api/worldbooks/'+e.id,{name:e.name,description:e.description})}
+    else{d=await this.api('POST','/api/worldbooks',{name:e.name,description:e.description})}
+    if(d){this.toastMsg('已保存','success');if(!e.id&&d.worldbook_id){await this.loadWorldbooks();await this.openWorldbook({id:d.worldbook_id})}else{this.worldbookEdit=null;await this.loadWorldbooks()}}
+  },
+  async deleteWorldbook(id){if(!confirm('确定删除此世界书?'))return;const d=await this.api('DELETE','/api/worldbooks/'+id);if(d){this.toastMsg('已删除','success');this.worldbookEdit=null;await this.loadWorldbooks()}},
+  async addWbEntry(){
+    if(!this.newWb.key||!this.newWb.content){this.toastMsg('请填写关键词和内容','error');return}
+    const d=await this.api('POST','/api/worldbooks/'+this.worldbookEdit.id+'/entries',this.newWb);
+    if(d){this.toastMsg('已添加','success');this.newWb={key:'',content:'',priority:0};await this.openWorldbook({id:this.worldbookEdit.id})}
+  },
+  async toggleWbEntry(e){await this.api('PUT','/api/worldbooks/entries/'+e.id,{enabled:!e.enabled});await this.openWorldbook({id:this.worldbookEdit.id})},
+  async deleteWbEntry(id){if(!confirm('删除此条目?'))return;await this.api('DELETE','/api/worldbooks/entries/'+id);await this.openWorldbook({id:this.worldbookEdit.id})},
+
+  // ===== Keyword Sets =====
+  async loadKeywordSets(){const d=await this.api('GET','/api/keyword-sets');if(d)this.keywordSets=d.sets||[]},
+  async openKeywordSet(ks){
+    if(ks){const d=await this.api('GET','/api/keyword-sets/'+ks.id);this.keywordSetEdit=d||{...ks,rules:[]}}
+    else{this.keywordSetEdit={name:'',description:'',rules:[]}}
+    this.showImport='';this.importText='';
+  },
+  async saveKeywordSet(){
+    const e=this.keywordSetEdit;
+    if(!e.name){this.toastMsg('请填写名称','error');return}
+    let d;
+    if(e.id){d=await this.api('PUT','/api/keyword-sets/'+e.id,{name:e.name,description:e.description})}
+    else{d=await this.api('POST','/api/keyword-sets',{name:e.name,description:e.description})}
+    if(d){this.toastMsg('已保存','success');if(!e.id&&d.set_id){await this.loadKeywordSets();await this.openKeywordSet({id:d.set_id})}else{this.keywordSetEdit=null;await this.loadKeywordSets()}}
+  },
+  async deleteKeywordSet(id){if(!confirm('确定删除此关键词集?'))return;const d=await this.api('DELETE','/api/keyword-sets/'+id);if(d){this.toastMsg('已删除','success');this.keywordSetEdit=null;await this.loadKeywordSets()}},
+  async addKwRule(){
+    if(!this.newKw.keyword||!this.newKw.reply){this.toastMsg('请填写关键词和回复','error');return}
+    const d=await this.api('POST','/api/keyword-sets/'+this.keywordSetEdit.id+'/rules',this.newKw);
+    if(d){this.toastMsg('已添加','success');this.newKw={keyword:'',reply:''};await this.openKeywordSet({id:this.keywordSetEdit.id})}
+  },
+  async toggleKwRule(r){await this.api('PUT','/api/keyword-sets/rules/'+r.id,{enabled:!r.enabled});await this.openKeywordSet({id:this.keywordSetEdit.id})},
+  async deleteKwRule(id){if(!confirm('删除此规则?'))return;await this.api('DELETE','/api/keyword-sets/rules/'+id);await this.openKeywordSet({id:this.keywordSetEdit.id})},
+
+  // ===== Tool Trigger Sets =====
+  async loadToolSets(){const d=await this.api('GET','/api/tool-sets');if(d)this.toolSets=d.sets||[]},
+  async loadToolsCatalog(){const d=await this.api('GET','/api/tools/catalog');if(d){this.toolsCatalog=d.tools||[];if(!this.newToolRule.tool_name&&this.toolsCatalog[0])this.newToolRule.tool_name=this.toolsCatalog[0].name}},
+  toolLabel(name){const t=this.toolsCatalog.find(x=>x.name===name);return t?t.label:name},
+  async openToolSet(ts){
+    if(ts){const d=await this.api('GET','/api/tool-sets/'+ts.id);this.toolSetEdit=d||{...ts,rules:[]}}
+    else{this.toolSetEdit={name:'',description:'',rules:[]}}
+    this.newToolRule={tool_name:(this.toolsCatalog[0]||{}).name||'web_search',triggersText:'',match_mode:'prefix'};
+  },
+  async saveToolSet(){
+    const e=this.toolSetEdit;if(!e.name){this.toastMsg('请填写名称','error');return}
+    let d;if(e.id)d=await this.api('PUT','/api/tool-sets/'+e.id,{name:e.name,description:e.description});else d=await this.api('POST','/api/tool-sets',{name:e.name,description:e.description});
+    if(d){this.toastMsg('已保存','success');if(!e.id&&d.set_id){await this.loadToolSets();await this.openToolSet({id:d.set_id})}else{this.toolSetEdit=null;await this.loadToolSets()}}
+  },
+  async deleteToolSet(id){if(!confirm('确定删除此工具触发词集?'))return;const d=await this.api('DELETE','/api/tool-sets/'+id);if(d){this.toastMsg('已删除','success');this.toolSetEdit=null;await this.loadToolSets()}},
+  async addToolRule(){
+    const e=this.toolSetEdit;const triggers=this.newToolRule.triggersText.split(/[,，]/).map(x=>x.trim()).filter(Boolean);
+    if(!this.newToolRule.tool_name||!triggers.length){this.toastMsg('请选择工具并填写触发词','error');return}
+    const tool=this.toolsCatalog.find(x=>x.name===this.newToolRule.tool_name)||{};
+    const d=await this.api('POST','/api/tool-sets/'+e.id+'/rules',{tool_name:this.newToolRule.tool_name,triggers,match_mode:this.newToolRule.match_mode,args_template:tool.default_args||{},priority:0,enabled:true});
+    if(d){this.toastMsg('已添加','success');this.newToolRule={tool_name:this.newToolRule.tool_name,triggersText:'',match_mode:'prefix'};await this.openToolSet({id:e.id})}
+  },
+  async toggleToolRule(r){await this.api('PUT','/api/tool-sets/rules/'+r.id,{enabled:!r.enabled});await this.openToolSet({id:this.toolSetEdit.id})},
+  async deleteToolRule(id){if(!confirm('删除此工具规则?'))return;await this.api('DELETE','/api/tool-sets/rules/'+id);await this.openToolSet({id:this.toolSetEdit.id})},
+
+  // ===== 模板下载 / 导入 =====
+  downloadTemplate(type){
+    let url='';
+    if(type==='persona')url='/api/personas/'+this.personaEdit.id+'/template';
+    if(type==='worldbook')url='/api/worldbooks/'+this.worldbookEdit.id+'/template';
+    if(type==='keyword-set')url='/api/keyword-sets/'+this.keywordSetEdit.id+'/template';
+    fetch(url,{headers:{'Authorization':'Bearer '+this.token}}).then(r=>r.blob()).then(b=>{
+      const a=document.createElement('a');a.href=URL.createObjectURL(b);
+      a.download=type+'_template.md';a.click();
+    });
+  },
+  async doImport(type){
+    if(!this.importText.trim()){this.toastMsg('请粘贴内容','error');return}
+    let text=this.importText.trim();
+    // 提取 ```json ... ``` 代码块
+    const m=text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if(m)text=m[1].trim();
+    let data;
+    try{data=JSON.parse(text)}catch(e){this.toastMsg('JSON 解析失败: '+e.message,'error');return}
+    let url='';
+    if(type==='persona')url='/api/personas/'+this.personaEdit.id+'/import';
+    if(type==='worldbook')url='/api/worldbooks/'+this.worldbookEdit.id+'/import';
+    if(type==='keyword-set')url='/api/keyword-sets/'+this.keywordSetEdit.id+'/import';
+    const d=await this.api('POST',url,data);
+    if(d){
+      this.toastMsg(d.message||'导入成功','success');this.showImport='';this.importText='';
+      if(type==='persona'){await this.loadPersonas();await this.openPersona({id:this.personaEdit.id})}
+      if(type==='worldbook'){await this.loadWorldbooks();await this.openWorldbook({id:this.worldbookEdit.id})}
+      if(type==='keyword-set'){await this.loadKeywordSets();await this.openKeywordSet({id:this.keywordSetEdit.id})}
+    }
+  },
+
+  // ===== Quiet / Messages / Logs / Queue =====
+  async saveQuiet(){const d=await this.api('PUT','/api/pairs/'+this.pair.id+'/quiet-hours',this.quietCfg);if(d)this.toastMsg('已保存','success')},
+  async loadMessages(){const ai=this.msgFilter==='ai';const side=['A','B'].includes(this.msgFilter)?this.msgFilter:'';const d=await this.api('GET',`/api/pairs/${this.pair.id}/messages?limit=100&ai_only=${ai}&side=${side}`);if(d){this.messages=d.messages||[];this.msgStats=d.stats||{}}},
+  async sendMessage(){if(!this.manualMsg.text){this.toastMsg('请输入消息','error');return}const d=await this.api('POST','/api/pairs/'+this.pair.id+'/messages/send',this.manualMsg);if(d){this.toastMsg('发送成功','success');this.manualMsg.text='';await this.loadMessages()}},
+  async loadLogs(){const d=await this.api('GET','/api/pairs/'+this.pair.id+'/logs?limit=100');if(d)this.logs=d.logs||[]},
+  toggleAutoRefresh(){if(this.autoRefresh){this.logTimer=setInterval(()=>this.loadLogs(),5000)}else{if(this.logTimer){clearInterval(this.logTimer);this.logTimer=null}}},
+  async loadQueue(){const d=await this.api('GET','/api/pairs/'+this.pair.id+'/queue');if(d)this.queue=d},
+  toggleQueueAuto(){if(this.queueAuto){this.queueTimer=setInterval(()=>this.loadQueue(),3000)}else{if(this.queueTimer){clearInterval(this.queueTimer);this.queueTimer=null}}},
+
+  // ===== System Settings =====
+  async loadSysCfg(){const d=await this.api('GET','/api/system/config');if(d)this.sysCfg=d},
+  async loadUpdateStatus(){const d=await this.api('GET','/api/system/update-status');if(d)this.updateStatus=d},
+  async loadVersion(){try{const r=await fetch('/api/system/version');const d=await r.json();this.appVer='v'+d.version;this.appBuild=d.build}catch(e){this.appVer='v?'}},
+  async saveSysCfg(){const d=await this.api('PUT','/api/system/config',{update_url:this.sysCfg.update_url});if(d)this.toastMsg('已保存','success')},
+  async doUpdate(){
+    if(!this.sysCfg.update_url){this.toastMsg('请先填写更新源 URL','error');return}
+    if(!confirm('确定从更新源下载并更新? 服务将自动重启.'))return;
+    this.updating=true;
+    const d=await this.api('POST','/api/system/update');
+    if(d){this.toastMsg(d.message,'success');await this.loadUpdateStatus()}
+    this.updating=false;
+  },
+  async uploadUpdate(e){
+    const file=e.target.files[0];if(!file)return;
+    if(!confirm('确定上传并更新? 服务将自动重启.'))return;
+    const fd=new FormData();fd.append('file',file);
+    this.updating=true;
+    const d=await this.api('POST','/api/system/update-upload',fd,true);
+    if(d){this.toastMsg(d.message,'success');await this.loadUpdateStatus()}
+    this.updating=false;e.target.value='';
+  },
+},
+watch:{
+  tab(v){
+    if(v==='messages')this.loadMessages();
+    if(v==='logs')this.loadLogs();
+    if(v==='queue')this.loadQueue();
+  },
+  page(){
+    if(this.logTimer){clearInterval(this.logTimer);this.logTimer=null;this.autoRefresh=false}
+    if(this.queueTimer){clearInterval(this.queueTimer);this.queueTimer=null;this.queueAuto=false}
+  }
+}
+}).mount('#app');
+</script>
+</body>
+</html>

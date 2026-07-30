@@ -1,0 +1,20 @@
+{
+  "docker-project": {
+    "projects": [
+      {
+        "name": "couple-relay-web",
+        "path": "docker"
+      }
+    ]
+  },
+  "data-share": {
+    "shares": [
+      {
+        "name": "couple-relay-web"
+      },
+      {
+        "name": "couple-relay-web/data"
+      }
+    ]
+  }
+}

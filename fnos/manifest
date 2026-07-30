@@ -1,0 +1,17 @@
+appname="couple-relay-web"
+version="1.4.0-20260730"
+display_name="Couple Relay Web"
+desc="基于 iLink Bot API 的微信双账号消息中继与 AI 陪聊管理系统。"
+maintainer="ankiller8709-stack"
+maintainer_url="https://github.com/ankiller8709-stack/couple-relay"
+distributor="ankiller8709-stack"
+distributor_url="https://github.com/ankiller8709-stack/couple-relay"
+source="thirdparty"
+platform="x86"
+os_min_version="1.2.0"
+ctl_stop=true
+desktop_uidir="ui"
+desktop_applaunchname="couple-relay-web.main"
+service_port=8080
+checkport=true
+changelog="首次飞牛应用中心测试版：包含双账号中继、AI 回复、消息队列及本地数据持久化。"
