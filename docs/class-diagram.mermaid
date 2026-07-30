@@ -1,0 +1,162 @@
+classDiagram
+    direction LR
+    class NasProfile {
+      +string id
+      +string displayName
+      +EndpointConfig lanEndpoint
+      +EndpointConfig? remoteEndpoint
+      +ConnectionMode activeMode
+      +ServiceConfig openClaw
+      +ServiceConfig qbittorrent
+      +ServiceConfig heimdall
+      +string createdAt
+      +string updatedAt
+    }
+    class EndpointConfig {
+      +string baseUrl
+      +EndpointKind kind
+      +boolean httpRiskAcknowledged
+      +string? lastVerifiedAt
+      +ProbeResult? lastProbe
+    }
+    class ServiceConfig {
+      +ServiceKind kind
+      +boolean enabled
+      +boolean inheritNasEndpoint
+      +string? overrideBaseUrl
+      +AuthConfigRef authRef
+      +string[] allowedRedirectOrigins
+    }
+    class AuthConfigRef {
+      +string profileId
+      +ServiceKind serviceKind
+      +AuthMethod method
+      +string vaultKey
+    }
+    class NavigationLayout {
+      +string profileId
+      +NavItemConfig[] items
+      +string updatedAt
+      +normalize() NavItemConfig[]
+    }
+    class NavItemConfig {
+      +AppRoute route
+      +boolean visible
+      +PresetIcon icon
+      +number order
+    }
+    class Torrent {
+      +string hash
+      +string name
+      +TorrentState state
+      +number progress
+      +number etaSeconds
+      +number sizeBytes
+      +number downloadedBytes
+      +number uploadedBytes
+      +number downloadSpeedBps
+      +number uploadSpeedBps
+      +string category
+      +string[] tags
+      +number addedOnUnix
+    }
+    class TorrentQuery {
+      +string searchText
+      +TorrentState[] states
+      +string[] categories
+      +string[] tags
+      +TorrentSortField sortBy
+      +SortDirection direction
+    }
+    class QbCapabilities {
+      +string appVersion
+      +string webApiVersion
+      +boolean canListTorrents
+      +boolean canAddTorrent
+      +boolean canPauseResume
+      +boolean canDelete
+      +boolean canManageCategories
+      +boolean canManageTags
+      +boolean canSetGlobalLimits
+      +boolean canSetTorrentLimits
+    }
+    class AppError {
+      +AppErrorCode code
+      +string userMessage
+      +boolean retryable
+      +string? status
+      +string? cause
+    }
+    class SecureVault {
+      <<interface>>
+      +setSecret(ref, value) Promise~void~
+      +getSecret(ref) Promise~string?~
+      +deleteSecrets(profileId) Promise~void~
+    }
+    class ProfileRepository {
+      <<interface>>
+      +list() Promise~NasProfile[]~
+      +save(profile) Promise~void~
+      +delete(profileId) Promise~void~
+      +getActiveId() Promise~string?~
+    }
+    class HttpClient {
+      +request(request) Promise~HttpResponse~
+      +postForm(url, body, auth) Promise~HttpResponse~
+      +timeoutMs number
+    }
+    class ConnectionProbe {
+      +validateEndpoint(endpoint, kind) ProbeResult
+      +probeProfile(profile) Promise~ServiceHealth[]~
+    }
+    class QbittorrentSession {
+      +login(profile, credentials) Promise~QbCapabilities~
+      +getCookie(profileId) Promise~string?~
+      +invalidate(profileId) Promise~void~
+    }
+    class QbittorrentApi {
+      +discover(profile) Promise~QbCapabilities~
+      +listTorrents(profile, query) Promise~Torrent[]~
+      +addTorrent(profile, source) Promise~void~
+      +setPaused(profile, hashes, paused) Promise~void~
+      +deleteTorrents(profile, hashes, deleteFiles) Promise~void~
+      +listCategories(profile) Promise~Category[]~
+      +setCategory(profile, hashes, category) Promise~void~
+      +listTags(profile) Promise~string[]~
+      +setTags(profile, hashes, tags) Promise~void~
+      +setGlobalLimits(profile, limits) Promise~void~
+      +setTorrentLimits(profile, hashes, limits) Promise~void~
+    }
+    class ProfileStore {
+      +initialize() Promise~void~
+      +saveProfile(input) Promise~void~
+      +switchProfile(profileId, mode) Promise~void~
+      +removeProfile(profileId) Promise~void~
+    }
+    class DownloadStore {
+      +refresh() Promise~void~
+      +startPolling(intervalMs) void
+      +stopPolling() void
+      +add(source) Promise~void~
+      +pause(hashes) Promise~void~
+      +resume(hashes) Promise~void~
+      +confirmDelete(hashes, deleteFiles, phrase) Promise~void~
+    }
+
+    NasProfile *-- EndpointConfig : owns
+    NasProfile *-- ServiceConfig : owns 3
+    ServiceConfig --> AuthConfigRef : references secret
+    NasProfile --> NavigationLayout : has per profile
+    ProfileRepository --> NasProfile : persists
+    SecureVault --> AuthConfigRef : stores
+    ConnectionProbe --> HttpClient : uses
+    QbittorrentSession --> SecureVault : stores Cookie
+    QbittorrentApi --> HttpClient : uses
+    QbittorrentApi --> QbittorrentSession : authenticates
+    QbittorrentApi --> QbCapabilities : discovers
+    QbittorrentApi --> Torrent : returns
+    DownloadStore --> QbittorrentApi : controls
+    DownloadStore --> TorrentQuery : applies
+    ProfileStore --> ProfileRepository : uses
+    ProfileStore --> SecureVault : deletes secrets
+    ProfileStore --> ConnectionProbe : validates

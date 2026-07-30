@@ -1,0 +1,11 @@
+FROM docker:27-cli
+
+# docker:27-cli 基础镜像自带的是 Alpine 官方源；NAS 国内网络常在此处超时，
+# 构建时显式切换为清华镜像，再安装 Compose 插件。
+RUN sed -i 's@dl-cdn.alpinelinux.org@mirrors.tuna.tsinghua.edu.cn@g' /etc/apk/repositories && \
+    apk add --no-cache docker-cli-compose
+
+COPY update-worker.sh /updater/update-worker.sh
+RUN chmod 755 /updater/update-worker.sh
+
+CMD ["/bin/sh", "/updater/update-worker.sh"]

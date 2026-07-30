@@ -1,0 +1,145 @@
+%% 4.1 首次启动、档案初始化与导航恢复
+sequenceDiagram
+    autonumber
+    actor User as 用户
+    participant App as App/initializeApp
+    participant ProfileStore
+    participant Repo as ProfileRepository
+    participant Vault as SecureVault
+    participant NavStore as NavigationStore
+    participant Navigator as AppNavigator
+
+    User->>App: 启动应用
+    App->>ProfileStore: initialize()
+    ProfileStore->>Repo: list(), getActiveId()
+    Repo-->>ProfileStore: NasProfile[] + activeProfileId?
+    alt 无活动档案
+        ProfileStore-->>App: needsOnboarding=true
+        App->>Navigator: render(OnboardingScreen)
+    else 有活动档案
+        ProfileStore->>NavStore: load(activeProfileId)
+        NavStore->>NavStore: normalize()（设置可见且末位；保留业务入口）
+        App->>Navigator: render(CustomTabNavigator, layout)
+        opt 用户主动下拉/进入首页后探测
+            App->>ProfileStore: probeActiveProfile()
+            ProfileStore->>Vault: getSecret(AuthConfigRef)
+            Vault-->>ProfileStore: secret 或空
+            ProfileStore-->>App: 真实 ServiceHealth + refreshedAt
+        end
+    end
+
+%% 4.2 保存 NAS 地址、验证并建立 qB 会话
+sequenceDiagram
+    autonumber
+    actor User as 用户
+    participant Editor as NasProfileEditorScreen
+    participant Policy as AddressPolicy
+    participant PStore as ProfileStore
+    participant Probe as ConnectionProbe
+    participant QBSession as QbittorrentSession
+    participant QBAPI as QbittorrentApi
+    participant Http as HttpClient
+    participant Vault as SecureVault
+    participant Repo as ProfileRepository
+
+    User->>Editor: 填写 LAN/远程地址、服务与凭据
+    Editor->>Policy: validateEndpoint(remote, REMOTE)
+    Policy-->>Editor: 仅 https 通过 / 配置错误
+    opt LAN HTTP
+        Editor->>User: 展示明文传输与同网攻击风险
+        User-->>Editor: 显式确认或取消
+    end
+    Editor->>PStore: saveProfile(draft, secrets)
+    PStore->>Policy: validateEndpoint(all endpoints)
+    PStore->>Probe: probeProfile(draft)
+    Probe->>Http: 受超时限制的服务检测请求
+    Http-->>Probe: reachable/auth/timeout/TLS/HTTP error
+    alt qB 已启用且输入账号密码
+        PStore->>QBSession: login(profile, credentials)
+        QBSession->>Http: POST /api/v2/auth/login
+        Http-->>QBSession: Set-Cookie 或认证失败
+        alt 认证成功
+            QBSession->>Vault: setSecret(qb cookie)
+            QBSession->>QBAPI: discover(profile)
+            QBAPI->>Http: version/webapiVersion/transfer/info/categories/tags
+            Http-->>QBAPI: 实际响应
+            QBAPI-->>PStore: QbCapabilities
+        else 失败
+            QBSession-->>PStore: AUTH_REQUIRED / error
+        end
+    end
+    PStore->>Vault: setSecret(各服务凭据；不含公开元数据)
+    PStore->>Repo: save(profile + probe/capabilities metadata)
+    Repo-->>PStore: saved
+    PStore-->>Editor: 每服务真实检测结果
+    Editor-->>User: 保存成功或可纠正错误
+
+%% 4.3 qBittorrent 列表刷新、添加、批量控制与强确认删除
+sequenceDiagram
+    autonumber
+    actor User as 用户
+    participant Screen as DownloadsScreen
+    participant Store as DownloadStore
+    participant API as QbittorrentApi
+    participant Session as QbittorrentSession
+    participant Vault as SecureVault
+    participant Http as HttpClient
+
+    User->>Screen: 进入下载页/下拉刷新
+    Screen->>Store: refresh()
+    Store->>API: listTorrents(activeProfile, query)
+    API->>Session: getCookie(profileId)
+    Session->>Vault: getSecret(qbCookieRef)
+    Vault-->>Session: Cookie
+    Session-->>API: Cookie
+    API->>Http: GET /api/v2/torrents/info + Cookie + AbortSignal
+    alt 200
+        Http-->>API: Torrent[]
+        API-->>Store: 原始任务
+        Store->>Store: 本地搜索/组合筛选/排序
+        Store-->>Screen: 数据 + refreshedAt
+    else 401/403
+        Http-->>API: authentication error
+        API->>Session: invalidate(profileId)
+        Session->>Vault: deleteSecret(qbCookieRef)
+        API-->>Store: AUTH_REQUIRED
+        Store-->>Screen: 登录/配置引导，无伪数据
+    else timeout/TLS/unreachable
+        Http-->>API: transport error
+        API-->>Store: mapped AppError
+        Store-->>Screen: 重试/配置/浏览器路径
+    end
+
+    opt 添加磁力或 URL
+        User->>Screen: 提交已校验的 magnet/http(s) URL
+        Screen->>Store: add(source)
+        Store->>API: addTorrent(profile, source)
+        API->>Http: POST /api/v2/torrents/add
+        Http-->>API: success/failure
+        API-->>Store: result
+        Store->>Store: 成功后 refresh()
+    end
+
+    opt 批量暂停或恢复
+        User->>Screen: 选择任务并确认操作
+        Screen->>Store: pause(hashes) / resume(hashes)
+        Store->>API: setPaused(profile, hashes, bool)
+        API->>Http: POST /torrents/pause or /resume
+        Http-->>API: result
+        API-->>Store: result；成功后 refresh()
+    end
+
+    opt 删除任务（高影响）
+        User->>Screen: 点击删除 N 个任务
+        Screen->>User: 第一次确认：默认 deleteFiles=false
+        alt 用户勾选“同时删除文件”
+            Screen->>User: 强风险确认，输入“删除文件”
+        end
+        User-->>Screen: 确认
+        Screen->>Store: confirmDelete(hashes, deleteFiles, phrase)
+        Store->>Store: 校验强确认短语与 capability
+        Store->>API: deleteTorrents(profile, hashes, deleteFiles)
+        API->>Http: POST /api/v2/torrents/delete
+        Http-->>API: result
+        API-->>Store: 成功后 refresh；失败保留任务
+    end

@@ -1,2 +1,21 @@
-chat_history.csv
-*.csv
+# Runtime secrets and durable user data
+.env
+.env.*
+!example.env
+data/
+relay.db
+media_archive/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local OS/editor files
+.DS_Store
+.vscode/
+.idea/
+
+# Local update artifacts
+*.tar.gz
+*.tgz

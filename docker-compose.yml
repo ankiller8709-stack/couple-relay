@@ -1,0 +1,42 @@
+services:
+  relay:
+    build:
+      # APP_BUILD_CONTEXT 仅用于 Docker 构建上下文；更新器容器内使用 /host/app，手动部署默认当前目录。
+      context: ${APP_BUILD_CONTEXT:-.}
+    container_name: couple-relay-web
+    # OpenClaw Gateway 仅监听 NAS 本机 127.0.0.1:44563；relay 使用 host 网络访问它，
+    # 不会把 Gateway 端口暴露到局域网或公网。
+    network_mode: host
+    volumes:
+      - relay-data:/data
+      # 后台一键更新需要: 挂载 docker socket 和项目目录
+      # HOST_APP_DIR 是 Docker daemon 看到的宿主机绝对目录；仅用于 bind mount。
+      - ${HOST_APP_DIR:-.}:/host/app
+    environment:
+      - ADMIN_PASSWORD=admin
+      - DATA_DIR=/data
+      - ILINK_BASE=https://ilinkai.weixin.qq.com
+      # 仅在联网搜索、新闻、天气工具触发时使用；日常聊天仍直连配对的 AI 模型。
+      - OPENCLAW_GATEWAY_URL=${OPENCLAW_GATEWAY_URL:-http://127.0.0.1:44563}
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-}
+      - OPENCLAW_GATEWAY_TIMEOUT=${OPENCLAW_GATEWAY_TIMEOUT:-15}
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+
+  updater:
+    build:
+      # APP_BUILD_CONTEXT 仅用于 Docker 构建上下文；更新器容器内使用 /host/app，手动部署默认当前目录。
+      context: ${APP_BUILD_CONTEXT:-.}
+      dockerfile: Dockerfile.updater
+    container_name: couple-relay-updater
+    volumes:
+      - relay-data:/data
+      # HOST_APP_DIR 是 Docker daemon 看到的宿主机绝对目录；仅用于 bind mount。
+      - ${HOST_APP_DIR:-.}:/host/app
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+
+volumes:
+  relay-data:

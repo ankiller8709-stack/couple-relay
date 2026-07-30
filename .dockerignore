@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+data/
+.git/
+.gitignore
+*.md
+!README.md
+# Gateway 密钥仅由 Compose 从宿主机 .env 注入，绝不复制进镜像或更新包。
+.env
