@@ -1,6 +1,6 @@
 # NAS Mobile v0.2 技术架构与实施任务分解
 
-> 基准：`docs/nas-mobile-prd.md` v0.2
+> 基准：`docs/nas-mobile-prd.md` v0.2  
 > 目标：原生可安装的 iOS/Android 跨平台应用；本轮仅完成 Android-first MVP 可运行源码结构与可验证集成，不承诺在当前环境完成 iOS 编译、签名或分发。
 
 ## A. 系统设计

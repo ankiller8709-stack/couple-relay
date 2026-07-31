@@ -484,6 +484,7 @@ input[type=range]::-webkit-slider-thumb{appearance:none;width:16px;height:16px;b
               <label class="toggle mb-16"><input type="checkbox" v-model="pair.auto_start"><span class="switch"></span> 实例启动后自动启动此配对</label>
             <div class="form-row">
               <div class="form-group"><label>刷新发送窗口命令</label><input v-model="pair.refresh_window_command" placeholder="，，"><span class="hint">精确匹配；仅冲刷发给命令发送者的队列，不转发、不触发 AI。</span></div>
+              <div class="form-group"><label>AI 自动回复开关命令</label><input v-model="pair.ai_toggle_command" placeholder="。。"><span class="hint">精确匹配；每次发送切换 AI 自动回复开/关，不转发、不触发 AI。</span></div>
               <div class="form-group"><label>每窗口最大连续下行条数</label><input type="number" v-model.number="pair.max_consecutive_downlinks" min="1" max="8"><span class="hint">建议保持 8，低于微信约 10 条的限制。</span></div>
             </div>
             <div class="flow-box mb-16">
@@ -929,7 +930,7 @@ methods:{
   async deletePair(id){if(!confirm('确定删除此配对? 所有配置和消息记录将丢失!'))return;const d=await this.api('DELETE','/api/pairs/'+id);if(d){this.toastMsg('已删除','success');this.goPage('pairs')}},
   async clonePair(id){const d=await this.api('POST','/api/pairs/'+id+'/clone');if(d){this.toastMsg('克隆成功','success');await this.loadPairs()}},
   async savePairSettings(){
-    const d=await this.api('PUT','/api/pairs/'+this.pair.id,{name:this.pair.name,description:this.pair.description,direction:this.pair.direction,ai_enabled:this.pair.ai_enabled,ai_trigger_side:this.pair.ai_trigger_side,auto_start:this.pair.auto_start,refresh_window_command:this.pair.refresh_window_command,max_consecutive_downlinks:this.pair.max_consecutive_downlinks});
+    const d=await this.api('PUT','/api/pairs/'+this.pair.id,{name:this.pair.name,description:this.pair.description,direction:this.pair.direction,ai_enabled:this.pair.ai_enabled,ai_trigger_side:this.pair.ai_trigger_side,auto_start:this.pair.auto_start,refresh_window_command:this.pair.refresh_window_command,ai_toggle_command:this.pair.ai_toggle_command,max_consecutive_downlinks:this.pair.max_consecutive_downlinks});
     if(d)this.toastMsg('设置已保存','success');
   },
   async savePairResources(){

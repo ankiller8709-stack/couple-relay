@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS pairs (
     tool_set_id INTEGER DEFAULT NULL,
     vision_model_id INTEGER DEFAULT NULL,
     refresh_window_command TEXT DEFAULT '，，',
+    ai_toggle_command TEXT DEFAULT '。。',
     max_consecutive_downlinks INTEGER DEFAULT 8,
     created_at  TEXT DEFAULT (datetime('now','localtime')),
     updated_at  TEXT DEFAULT (datetime('now','localtime'))
@@ -335,6 +336,8 @@ class Database:
                 c.execute("ALTER TABLE pairs ADD COLUMN vision_model_id INTEGER DEFAULT NULL")
             if "refresh_window_command" not in cols:
                 c.execute("ALTER TABLE pairs ADD COLUMN refresh_window_command TEXT DEFAULT '，，'")
+            if "ai_toggle_command" not in cols:
+                c.execute("ALTER TABLE pairs ADD COLUMN ai_toggle_command TEXT DEFAULT '。。'")
             if "max_consecutive_downlinks" not in cols:
                 c.execute("ALTER TABLE pairs ADD COLUMN max_consecutive_downlinks INTEGER DEFAULT 8")
             if "auto_start" not in cols:
@@ -914,14 +917,14 @@ class Database:
         allowed = {"name", "description", "status", "auto_start", "direction", "ai_enabled",
                    "ai_trigger_side", "ai_model_id", "persona_id", "worldbook_id",
                    "keyword_set_id", "tool_set_id", "vision_model_id",
-                   "refresh_window_command", "max_consecutive_downlinks"}
+                   "refresh_window_command", "ai_toggle_command", "max_consecutive_downlinks"}
         sets = []
         vals = []
         for k, v in fields.items():
             if k in allowed:
                 if k in ("ai_enabled", "auto_start"):
                     v = 1 if v else 0
-                if k == "refresh_window_command":
+                if k in ("refresh_window_command", "ai_toggle_command"):
                     v = str(v or "").strip()[:32]
                 if k == "max_consecutive_downlinks":
                     try:

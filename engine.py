@@ -816,6 +816,22 @@ class PairRunner:
         command = self._refresh_window_command()
         return bool(command) and str(text or "").strip() == command
 
+    def _ai_toggle_command(self) -> str:
+        return str(self._pair_info.get("ai_toggle_command", "。。") or "").strip()
+
+    def _is_ai_toggle_command(self, text: str) -> bool:
+        command = self._ai_toggle_command()
+        return bool(command) and str(text or "").strip() == command
+
+    async def _toggle_ai_enabled(self, side: str):
+        """切换当前配对的 AI 自动回复；命令不转发、不进入聊天流程。"""
+        enabled = not bool(self._pair_info.get("ai_enabled"))
+        self.db.update_pair(self.pair_id, ai_enabled=enabled)
+        self._pair_info["ai_enabled"] = enabled
+        self._cancel_ai()
+        status = "开启" if enabled else "关闭"
+        self._log("INFO", f"[AI切换命令←{side}] AI自动回复已{status}，未转发、未记录")
+
     def _window_can_send(self, target: str) -> bool:
         state = self._downlink_window[target]
         return not state.get("blocked_by_ilink", False) and state["sent"] < self._downlink_limit()
@@ -878,6 +894,10 @@ class PairRunner:
         if msg.media_type == "text" and self._is_refresh_window_command(text):
             await self._flush_outbox(target=side, force=True)
             self._log("INFO", f"[刷新命令←{side}] 已消费，未转发、未触发AI")
+            return
+        # AI 切换命令与刷新命令相同：精确匹配、只影响当前配对、不转发也不记录。
+        if msg.media_type == "text" and self._is_ai_toggle_command(text):
+            await self._toggle_ai_enabled(side)
             return
 
         # 方向限制

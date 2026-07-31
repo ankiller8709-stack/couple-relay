@@ -122,6 +122,53 @@ OPENCLAW_TOOL_MAP = {
     "weather": "web_search",
 }
 
+# OpenClaw 连接配置（由后台系统设置写入，进程内缓存；环境变量作为兜底）。
+_OPENCLAW_CONFIG = {"url": "", "token": "", "timeout": 15}
+
+
+def set_openclaw_config(url: str = "", token: str = "", timeout: int = 15):
+    """后台保存 OpenClaw 对接配置后调用，更新进程内缓存。"""
+    try:
+        timeout = max(3, min(int(timeout), 18))
+    except (ValueError, TypeError):
+        timeout = 15
+    _OPENCLAW_CONFIG["url"] = (url or "").strip().rstrip("/")
+    _OPENCLAW_CONFIG["token"] = (token or "").strip()
+    _OPENCLAW_CONFIG["timeout"] = timeout
+
+
+def _openclaw_connection_params() -> dict:
+    cfg = _OPENCLAW_CONFIG
+    url = (cfg.get("url") or os.getenv("OPENCLAW_GATEWAY_URL", "")).strip().rstrip("/")
+    token = (cfg.get("token") or os.getenv("OPENCLAW_GATEWAY_TOKEN", "")).strip()
+    try:
+        timeout = max(3, min(int(cfg.get("timeout") or os.getenv("OPENCLAW_GATEWAY_TIMEOUT", "15")), 18))
+    except (ValueError, TypeError):
+        timeout = 15
+    return {"url": url, "token": token, "timeout": timeout}
+
+
+async def test_openclaw_connection() -> dict:
+    """用当前配置的 Gateway 发一次探测请求，返回可达性与错误信息。"""
+    p = _openclaw_connection_params()
+    if not p["url"]:
+        return {"ok": False, "message": "未配置 OpenClaw Gateway 地址"}
+    if not p["token"]:
+        return {"ok": False, "message": "未配置 OpenClaw Token"}
+    headers = {"Authorization": f"Bearer {p['token']}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=min(p["timeout"], 10), follow_redirects=False) as client:
+            r = await client.post(
+                f"{p['url']}/tools/invoke",
+                headers=headers,
+                json={"tool": "web_search", "args": {"query": "连接测试", "count": 1}},
+            )
+        if r.status_code < 500:
+            return {"ok": True, "message": f"连接成功 (HTTP {r.status_code})"}
+        return {"ok": False, "message": f"OpenClaw 返回 HTTP {r.status_code}"}
+    except Exception as e:
+        return {"ok": False, "message": f"无法连接: {type(e).__name__}: {e}"}
+
 
 def _openclaw_error_message(name: str) -> str:
     labels = {
@@ -161,20 +208,19 @@ def _openclaw_result_text(payload) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-async def tool_openclaw(name: str, text: str) -> str:
-    """只经 NAS 本机 OpenClaw Gateway 调用联网白名单工具，不提供任意工具名或 URL。"""
+async def tool_openclaw(name: str, text: str, allow_all: bool = False, args: Optional[dict] = None) -> str:
+    """调用 OpenClaw Gateway；allow_all 开启时仅将后台配置的工具名和参数转发给 Gateway。"""
+    if name not in OPENCLAW_TOOL_NAMES and not allow_all:
+        return "该 OpenClaw 工具未获允许。"
     query = _openclaw_query(name, text)
     if name == "web_search" and not query:
         return "缺少要搜索的问题。"
     if name == "weather" and not str(text or "").strip():
         return "请在“天气”后写城市，例如：天气 上海。"
 
-    gateway_url = os.getenv("OPENCLAW_GATEWAY_URL", "http://127.0.0.1:44563").rstrip("/")
-    gateway_token = os.getenv("OPENCLAW_GATEWAY_TOKEN", "").strip()
-    try:
-        timeout = max(3, min(int(os.getenv("OPENCLAW_GATEWAY_TIMEOUT", "15")), 18))
-    except ValueError:
-        timeout = 15
+    gateway_url = (_openclaw_connection_params()["url"] or "http://127.0.0.1:44563").rstrip("/")
+    gateway_token = _openclaw_connection_params()["token"]
+    timeout = _openclaw_connection_params()["timeout"]
     if not gateway_token:
         logger.warning("[OpenClaw] Gateway Token 未配置")
         return _openclaw_error_message(name)
@@ -184,9 +230,11 @@ async def tool_openclaw(name: str, text: str) -> str:
         "Content-Type": "application/json",
     }
     payload = {
-        "tool": OPENCLAW_TOOL_MAP[name],
-        "args": {"query": query, "count": 5},
+        "tool": OPENCLAW_TOOL_MAP.get(name, name),
+        "args": args if allow_all and isinstance(args, dict) else {"query": query, "count": 5},
     }
+    if allow_all and not payload["args"]:
+        payload["args"] = {"query": query}
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             response = await client.post(f"{gateway_url}/tools/invoke", headers=headers, json=payload)
@@ -233,12 +281,14 @@ async def tool_get_time() -> str:
     return f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
 
-async def execute_registered_tool(name: str, args: dict) -> str:
-    """仅执行注册表中的白名单工具，后台规则永不直接执行脚本或任意 URL。"""
+async def execute_registered_tool(name: str, args: dict, allow_openclaw_all: bool = False) -> str:
+    """执行内置安全工具；开启后可将后台规则指定的工具名转发给 OpenClaw Gateway。"""
     text = str(args.get("query", args.get("text", ""))).strip()
-    # 日常聊天仍走当前配对模型；只有这三个联网工具经 OpenClaw Gateway 获取事实。
+    # 日常聊天仍走当前配对模型；联网工具和允许的扩展工具均由 OpenClaw Gateway 执行。
     if name in OPENCLAW_TOOL_NAMES:
-        return await tool_openclaw(name, text)
+        return await tool_openclaw(name, text, allow_all=allow_openclaw_all, args=args)
+    if allow_openclaw_all and name not in {"calculate", "get_time", "translate", "summarize", "explain"}:
+        return await tool_openclaw(name, text, allow_all=True, args=args)
     if name == "calculate":
         return _safe_calculate(text)
     if name == "get_time":
@@ -504,6 +554,7 @@ class PairRunner:
         self._worldbook: list = []
         self._keyword_rules: list = []
         self._tool_trigger_rules: list = []
+        self._allow_openclaw_all = False
         self._quiet_hours: dict = {}
         self._account_a: dict = {}
         self._account_b: dict = {}
@@ -523,7 +574,7 @@ class PairRunner:
         self._persona = self._load_persona()
         self._worldbook = self._load_worldbook()
         self._keyword_rules = self._load_keyword_rules()
-        self._tool_trigger_rules = self._load_tool_trigger_rules()
+        self._tool_trigger_rules, self._allow_openclaw_all = self._load_tool_trigger_rules()
         self._quiet_hours = self.db.get_quiet_hours(self.pair_id) or {}
         accounts = self.db.list_accounts(self.pair_id)
         self._account_a = next((a for a in accounts if a["role"] == "A"), {})
@@ -562,12 +613,13 @@ class PairRunner:
             return ks.get("rules", []) if ks else []
         return []
 
-    def _load_tool_trigger_rules(self) -> list:
+    def _load_tool_trigger_rules(self) -> tuple[list, bool]:
         tool_set_id = self._pair_info.get("tool_set_id")
         if tool_set_id:
             tool_set = self.db.get_tool_set(tool_set_id)
-            return tool_set.get("rules", []) if tool_set else []
-        return []
+            if tool_set:
+                return tool_set.get("rules", []), bool(tool_set.get("allow_openclaw_all", False))
+        return [], False
 
     def _match_tool_trigger(self, text: str) -> Optional[dict]:
         """只匹配后台启用的安全工具规则；prefix 会剥掉触发词后的查询内容。"""
@@ -606,7 +658,9 @@ class PairRunner:
         args = self._render_tool_args(rule.get("args_template", {}), text, rule.get("matched_trigger", ""), rule.get("query", ""))
         self._log("INFO", f"[工具触发] {rule.get('matched_trigger')} → {tool_name}: {(rule.get('query') or text)[:80]}")
         try:
-            result = await asyncio.wait_for(execute_registered_tool(tool_name, args), timeout=20)
+            result = await asyncio.wait_for(
+                execute_registered_tool(tool_name, args, self._allow_openclaw_all), timeout=20
+            )
         except asyncio.TimeoutError:
             result = "该功能响应超时，请稍后再试。"
         except Exception as e:

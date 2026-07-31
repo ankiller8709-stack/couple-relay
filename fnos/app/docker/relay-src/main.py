@@ -35,11 +35,11 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 from database import Database, get_db
-from engine import RelayEngine, TOOL_CATALOG
+from engine import RelayEngine, TOOL_CATALOG, set_openclaw_config, test_openclaw_connection
 
 # ==================== 版本 ====================
 APP_VERSION = "1.4.0"
-APP_BUILD = "20260729s"
+APP_BUILD = "20260731fpk"
 
 # ==================== 日志 ====================
 
@@ -54,6 +54,14 @@ logger = logging.getLogger("main")
 
 db = get_db()
 engine = RelayEngine(db)
+
+# 启动时把已保存的 OpenClaw 对接配置载入进程内缓存
+_cfg = db.get_system_config()
+set_openclaw_config(
+    _cfg.get("openclaw_gateway_url", ""),
+    _cfg.get("openclaw_token", ""),
+    _cfg.get("openclaw_timeout", 15),
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -207,6 +215,7 @@ class ToolSetCreate(BaseModel):
 class ToolSetUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    allow_openclaw_all: Optional[bool] = None
 
 class ToolTriggerRule(BaseModel):
     tool_name: str
@@ -236,6 +245,9 @@ class ManualMessage(BaseModel):
 class SystemConfigUpdate(BaseModel):
     update_url: Optional[str] = None
     version: Optional[str] = None
+    openclaw_gateway_url: Optional[str] = None
+    openclaw_token: Optional[str] = None
+    openclaw_timeout: Optional[int] = Field(None, ge=3, le=18)
 
 # ==================== AI 模型预设 ====================
 
@@ -383,110 +395,40 @@ async def download_media_library_file(filename: str, request: Request, inline: b
 @app.get("/api/system/config")
 async def get_system_config(request: Request):
     check_auth(request)
-    return db.get_system_config()
+    d = db.get_system_config()
+    tok = (d.get("openclaw_token") or "").strip()
+    if tok:
+        d["openclaw_token_masked"] = (tok[:4] + "****" + tok[-4:]) if len(tok) > 8 else "****"
+        d["openclaw_token_set"] = True
+    else:
+        d["openclaw_token_masked"] = ""
+        d["openclaw_token_set"] = False
+    return d
 
 
 @app.put("/api/system/config")
 async def update_system_config(req: SystemConfigUpdate, request: Request):
     check_auth(request)
-    db.update_system_config(**req.dict(exclude_none=True))
+    data = req.dict(exclude_none=True)
+    # 空 Token 表示不修改，保留原值
+    if data.get("openclaw_token") == "":
+        data.pop("openclaw_token", None)
+    db.update_system_config(**data)
+    # 同步进程内 OpenClaw 配置缓存
+    cfg = db.get_system_config()
+    set_openclaw_config(
+        cfg.get("openclaw_gateway_url", ""),
+        cfg.get("openclaw_token", ""),
+        cfg.get("openclaw_timeout", 15),
+    )
     return {"message": "系统配置已更新"}
 
 
-@app.post("/api/system/update")
-async def system_update(request: Request):
-    """从配置的 update_url 下载新版并更新"""
+@app.post("/api/openclaw/test")
+async def openclaw_test(request: Request):
+    """探测当前 OpenClaw Gateway 是否可达。"""
     check_auth(request)
-    cfg = db.get_system_config()
-    url = cfg.get("update_url", "")
-    if not url:
-        raise HTTPException(400, "未配置更新源 URL, 请先在系统设置中设置")
-    try:
-        result = await _do_update(url)
-        return result
-    except Exception as e:
-        logger.exception("更新失败")
-        raise HTTPException(500, f"更新失败: {e}")
-
-
-@app.post("/api/system/update-upload")
-async def system_update_upload(request: Request, file: UploadFile = File(...)):
-    """上传 tar.gz 更新包进行更新"""
-    check_auth(request)
-    if not file.filename.endswith((".tar.gz", ".tgz")):
-        raise HTTPException(400, "请上传 .tar.gz 文件")
-    update_dir = Path("/data/update")
-    update_dir.mkdir(parents=True, exist_ok=True)
-    tar_path = update_dir / "upload-update.tar.gz"
-    with tar_path.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
-    try:
-        result = await _do_update(str(tar_path), is_local=True)
-        return result
-    except Exception as e:
-        logger.exception("上传更新失败")
-        raise HTTPException(500, f"更新失败: {e}")
-
-
-@app.get("/api/system/update-status")
-async def get_update_status(request: Request):
-    """返回独立更新器写入的最近一次更新状态。"""
-    check_auth(request)
-    status_path = Path("/data/update/status.json")
-    if not status_path.exists():
-        return {"status": "idle", "message": "暂无更新任务"}
-    try:
-        return json.loads(status_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {"status": "unknown", "message": "更新状态文件无法读取"}
-
-
-async def _do_update(source: str, is_local: bool = False):
-    """校验并提交更新包，由独立 updater 容器完成宿主机重建。
-
-    relay 容器不再用 docker.sock 重建自己，避免命令不存在、自我终止和错误被吞掉。
-    """
-    update_dir = Path("/data/update")
-    update_dir.mkdir(parents=True, exist_ok=True)
-    tar_path = update_dir / "update.tar.gz"
-
-    if is_local:
-        tar_path = Path(source)
-    else:
-        logger.info(f"[更新] 下载: {source}")
-        urllib.request.urlretrieve(source, tar_path)
-
-    # 统一写入更新器监控的固定文件名；实际解压和覆盖由独立 updater 完成。
-    canonical_archive = update_dir / "upload-update.tar.gz"
-    if tar_path != canonical_archive:
-        shutil.copy2(tar_path, canonical_archive)
-    tar_path = canonical_archive
-
-    # 只检查压缩包结构；实际解压和覆盖由独立 updater 完成。
-    try:
-        with tarfile.open(tar_path, "r:gz") as tf:
-            names = [m.name.lstrip("./") for m in tf.getmembers() if m.isfile()]
-    except tarfile.TarError as e:
-        raise ValueError(f"更新包无法读取: {e}")
-
-    has_root_project = "main.py" in names and any(n.startswith("static/") for n in names)
-    has_wrapped_project = any(n.endswith("/main.py") and n.startswith("couple-relay") for n in names)
-    if not (has_root_project or has_wrapped_project):
-        raise ValueError("更新包中未找到 main.py 和 static/ 项目文件")
-
-    request_path = update_dir / "update-request.json"
-    status_path = update_dir / "status.json"
-    status_path.write_text(json.dumps({
-        "status": "queued",
-        "message": "更新包已校验，等待独立更新器重建服务",
-        "requested_at": datetime.now().isoformat(timespec="seconds"),
-    }, ensure_ascii=False), encoding="utf-8")
-    request_path.write_text(json.dumps({
-        "archive": str(tar_path),
-        "requested_at": datetime.now().isoformat(timespec="seconds"),
-    }, ensure_ascii=False), encoding="utf-8")
-    logger.info("[更新] 更新任务已提交给独立 updater")
-    return {"message": "更新任务已提交，独立更新器将构建并重启服务；请在约 1-3 分钟后刷新并查看更新状态。", "status": "queued"}
+    return await test_openclaw_connection()
 
 
 # ==================== Pairs ====================
@@ -1098,8 +1040,12 @@ async def delete_tool_set(set_id: int, request: Request):
 @app.post("/api/tool-sets/{set_id}/rules")
 async def add_tool_trigger_rule(set_id: int, req: ToolTriggerRule, request: Request):
     check_auth(request)
-    if not any(item["name"] == req.tool_name for item in TOOL_CATALOG):
-        raise HTTPException(400, "不支持的工具类型")
+    tool_set = db.get_tool_set(set_id)
+    if not tool_set:
+        raise HTTPException(404, "工具触发词集不存在")
+    is_builtin = any(item["name"] == req.tool_name for item in TOOL_CATALOG)
+    if not is_builtin and not tool_set.get("allow_openclaw_all", False):
+        raise HTTPException(400, "未开启“允许调用全部”，只能选择内置工具")
     rule_id = db.add_tool_trigger_rule(set_id, **req.dict())
     for p in db.list_pairs():
         if p.get("tool_set_id") == set_id:
@@ -1114,7 +1060,9 @@ async def update_tool_trigger_rule(rule_id: int, req: ToolTriggerRuleUpdate, req
         raise HTTPException(404, "工具规则不存在")
     data = req.dict(exclude_none=True)
     if "tool_name" in data and not any(item["name"] == data["tool_name"] for item in TOOL_CATALOG):
-        raise HTTPException(400, "不支持的工具类型")
+        tool_set = db.get_tool_set(old["set_id"])
+        if not tool_set or not tool_set.get("allow_openclaw_all", False):
+            raise HTTPException(400, "未开启“允许调用全部”，只能选择内置工具")
     db.update_tool_trigger_rule(rule_id, **data)
     for p in db.list_pairs():
         if p.get("tool_set_id") == old["set_id"]:

@@ -192,11 +192,12 @@ CREATE TABLE IF NOT EXISTS keyword_rules (
 );
 
 CREATE TABLE IF NOT EXISTS tool_sets (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL,
-    description TEXT DEFAULT '',
-    created_at  TEXT DEFAULT (datetime('now','localtime')),
-    updated_at  TEXT DEFAULT (datetime('now','localtime'))
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    name               TEXT NOT NULL,
+    description        TEXT DEFAULT '',
+    allow_openclaw_all INTEGER DEFAULT 0,
+    created_at         TEXT DEFAULT (datetime('now','localtime')),
+    updated_at         TEXT DEFAULT (datetime('now','localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS tool_trigger_rules (
@@ -257,7 +258,10 @@ CREATE TABLE IF NOT EXISTS admin_config (
 CREATE TABLE IF NOT EXISTS system_config (
     id          INTEGER PRIMARY KEY CHECK (id = 1),
     update_url  TEXT DEFAULT '',
-    version     TEXT DEFAULT '1.1.0'
+    version     TEXT DEFAULT '1.1.0',
+    openclaw_gateway_url TEXT DEFAULT '',
+    openclaw_token       TEXT DEFAULT '',
+    openclaw_timeout     INTEGER DEFAULT 15
 );
 """
 
@@ -340,6 +344,20 @@ class Database:
             if "auto_start" not in cols:
                 c.execute("ALTER TABLE pairs ADD COLUMN auto_start INTEGER DEFAULT 0")
 
+            # 迁移: 工具词集可选择是否允许转发任意 OpenClaw 工具名
+            tool_set_cols = [r[1] for r in c.execute("PRAGMA table_info(tool_sets)").fetchall()]
+            if "allow_openclaw_all" not in tool_set_cols:
+                c.execute("ALTER TABLE tool_sets ADD COLUMN allow_openclaw_all INTEGER DEFAULT 0")
+
+            # 迁移: 系统配置增加 OpenClaw 对接字段
+            sc_cols = [r[1] for r in c.execute("PRAGMA table_info(system_config)").fetchall()]
+            if "openclaw_gateway_url" not in sc_cols:
+                c.execute("ALTER TABLE system_config ADD COLUMN openclaw_gateway_url TEXT DEFAULT ''")
+            if "openclaw_token" not in sc_cols:
+                c.execute("ALTER TABLE system_config ADD COLUMN openclaw_token TEXT DEFAULT ''")
+            if "openclaw_timeout" not in sc_cols:
+                c.execute("ALTER TABLE system_config ADD COLUMN openclaw_timeout INTEGER DEFAULT 15")
+
             # 默认管理员
             row = c.execute("SELECT COUNT(*) FROM admin_config WHERE id=1").fetchone()
             if row[0] == 0:
@@ -353,7 +371,7 @@ class Database:
             # 默认系统配置
             row = c.execute("SELECT COUNT(*) FROM system_config WHERE id=1").fetchone()
             if row[0] == 0:
-                c.execute("INSERT INTO system_config (id, update_url, version) VALUES (1, '', '1.1.0')")
+                c.execute("INSERT INTO system_config (id, update_url, version, openclaw_gateway_url, openclaw_token, openclaw_timeout) VALUES (1, '', '1.1.0', '', '', 15)")
 
         # 数据迁移: 旧版 per-pair 资源 -> 系统级资源
         try:
@@ -824,7 +842,7 @@ class Database:
             return dict(r) if r else {"update_url": "", "version": "1.1.0"}
 
     def update_system_config(self, **fields):
-        allowed = {"update_url", "version"}
+        allowed = {"update_url", "version", "openclaw_gateway_url", "openclaw_token", "openclaw_timeout"}
         sets = []
         vals = []
         for k, v in fields.items():
@@ -1331,7 +1349,7 @@ class Database:
             r = c.execute("SELECT * FROM tool_sets WHERE id=?", (set_id,)).fetchone()
             if not r:
                 return None
-            d = dict(r)
+            d = self._row_bool(dict(r), "allow_openclaw_all")
             d["rules"] = self.list_tool_trigger_rules(set_id)
             return d
 
@@ -1341,10 +1359,12 @@ class Database:
             return cur.lastrowid
 
     def update_tool_set(self, set_id: int, **fields):
-        allowed = {"name", "description"}
+        allowed = {"name", "description", "allow_openclaw_all"}
         sets, vals = [], []
         for k, v in fields.items():
             if k in allowed:
+                if k == "allow_openclaw_all":
+                    v = 1 if v else 0
                 sets.append(f"{k}=?")
                 vals.append(v)
         if not sets:

@@ -3,8 +3,8 @@ services:
     build:
       context: ./relay-src
       dockerfile: Dockerfile
-    image: couple-relay-web:1.4.0-20260730
-    container_name: couple-relay-web-fnos
+    image: couple-relay-fnos:1.4.0
+    container_name: couple-relay-fnos
     restart: unless-stopped
     ports:
       - "${TRIM_SERVICE_PORT}:8080"

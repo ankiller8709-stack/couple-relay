@@ -1,13 +1,13 @@
 {
   ".url": {
-    "couple-relay-web.main": {
-      "title": "Couple Relay Web",
+    "couple-relay-web.Application": {
+      "title": "Lover AIChat",
       "icon": "images/icon_{0}.png",
       "type": "url",
       "protocol": "http",
-      "port": "{port}",
+      "port": 18080,
       "url": "/",
-      "allUsers": false
+      "allUsers": true
     }
   }
 }

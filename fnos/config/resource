@@ -2,7 +2,7 @@
   "docker-project": {
     "projects": [
       {
-        "name": "couple-relay-web",
+        "name": "couple-relay-fnos",
         "path": "docker"
       }
     ]
@@ -10,10 +10,10 @@
   "data-share": {
     "shares": [
       {
-        "name": "couple-relay-web"
+        "name": "couple-relay-fnos"
       },
       {
-        "name": "couple-relay-web/data"
+        "name": "couple-relay-fnos/data"
       }
     ]
   }

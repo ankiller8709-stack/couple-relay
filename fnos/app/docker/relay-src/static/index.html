@@ -730,13 +730,18 @@ input[type=range]::-webkit-slider-thumb{appearance:none;width:16px;height:16px;b
           <div class="card-title">{{ toolSetEdit.id?'编辑工具触发词集':'新建工具触发词集' }}</div>
           <div class="form-row"><div class="form-group"><label>名称</label><input v-model="toolSetEdit.name"></div><div class="form-group"><label>描述</label><input v-model="toolSetEdit.description"></div></div>
           <template v-if="toolSetEdit.id">
+            <div class="form-group" style="padding:12px;border:1px solid var(--border);border-radius:8px">
+              <label class="toggle"><input type="checkbox" v-model="toolSetEdit.allow_openclaw_all"><span class="switch"></span></label>
+              <strong style="margin-left:8px">允许调用全部 OpenClaw 工具</strong>
+              <p class="hint">开启后可填写并调用 OpenClaw 中配置的任意工具名；仍只会通过已填写的 OpenClaw Gateway 发起请求，不会在 Lover AIChat 容器中执行脚本或系统命令。</p>
+            </div>
             <h4 class="mb-8">规则 ({{ (toolSetEdit.rules||[]).length }})</h4>
             <div class="form-row">
-              <div class="form-group"><label>调用工具</label><select v-model="newToolRule.tool_name"><option v-for="tool in toolsCatalog" :key="tool.name" :value="tool.name">{{ tool.label }}</option></select></div>
+              <div class="form-group"><label>调用工具</label><input v-if="toolSetEdit.allow_openclaw_all" v-model="newToolRule.tool_name" placeholder="输入 OpenClaw 工具名"><select v-else v-model="newToolRule.tool_name"><option v-for="tool in toolsCatalog" :key="tool.name" :value="tool.name">{{ tool.label }}</option></select></div>
               <div class="form-group" style="flex:2"><label>触发词（用逗号分隔）</label><input v-model="newToolRule.triggersText" placeholder="如：查一下, 搜索"></div>
               <div class="form-group"><label>匹配方式</label><select v-model="newToolRule.match_mode"><option value="prefix">前缀匹配</option><option value="contains">包含匹配</option></select></div>
             </div>
-            <p class="hint mb-8">前缀匹配示例：<code>天气 上海</code>，系统会把“上海”传给天气工具。工具只可从内置目录选择，不能执行任意脚本或网址。</p>
+            <p class="hint mb-8">前缀匹配示例：<code>天气 上海</code>，系统会把“上海”传给工具。关闭“允许调用全部”时只能选择内置目录；开启时工具名由 OpenClaw 处理。</p>
             <button class="btn btn-sm btn-primary mb-16" @click="addToolRule">+ 添加工具规则</button>
             <div v-for="r in (toolSetEdit.rules||[])" :key="r.id" class="dialog-item"><div class="flex-between"><div><strong>{{ toolLabel(r.tool_name) }}</strong> <span class="muted">{{ r.match_mode==='prefix'?'前缀':'包含' }}</span><br><span class="small">触发词：{{ (r.triggers||[]).join('、') }}</span><span v-if="!r.enabled" class="badge badge-stopped">已禁用</span></div><div class="flex gap-8"><label class="toggle"><input type="checkbox" :checked="r.enabled" @change="toggleToolRule(r)"><span class="switch"></span></label><button class="btn btn-sm btn-danger" @click="deleteToolRule(r.id)">删除</button></div></div></div>
           </template>
@@ -785,24 +790,34 @@ input[type=range]::-webkit-slider-thumb{appearance:none;width:16px;height:16px;b
           <button class="btn btn-primary" @click="changePassword">修改密码</button>
         </div>
         <div class="card">
-          <div class="card-title">系统更新</div>
+          <div class="card-title">OpenClaw 对接（可选）</div>
+          <p class="hint mb-8">把 OpenClaw 当作一个外部 API 使用：在 OpenClaw 里配置好工具、模型与权限后，把它的 Gateway 地址和 Token 填到这里即可。所有工具执行、搜索源、Key 轮换都在 OpenClaw 内完成，Lover AIChat 只负责调用。</p>
           <div class="form-group">
-            <label>更新源 URL (couple-relay-web.tar.gz 的下载地址)</label>
-            <input v-model="sysCfg.update_url" placeholder="如: https://example.com/couple-relay-web.tar.gz">
-            <p class="hint">填写后点击「立即更新」会从该地址下载新版并自动重启。也可以直接上传更新包。</p>
+            <label>OpenClaw Gateway 地址</label>
+            <input v-model="sysCfg.openclaw_gateway_url" placeholder="如: http://openclaw-gateway:44563">
+            <span class="hint">需为 FPK 容器可访问的地址，不要只填 127.0.0.1。</span>
+          </div>
+          <div class="form-group">
+            <label>OpenClaw Token</label>
+            <input v-model="ocToken" type="password" placeholder="在 OpenClaw 中生成的鉴权 Token">
+            <span class="hint" v-if="sysCfg.openclaw_token_set">当前已设置：{{ sysCfg.openclaw_token_masked }}（如需更换请重新输入）</span>
+          </div>
+          <div class="form-group">
+            <label>请求超时(秒)</label>
+            <input type="number" v-model.number="sysCfg.openclaw_timeout" min="3" max="18">
           </div>
           <div class="flex gap-8" style="flex-wrap:wrap">
-            <button class="btn btn-primary" @click="saveSysCfg">保存更新源</button>
-            <button class="btn btn-warning" @click="doUpdate"><span class="icon" v-html="ic('i-refresh')"></span> 立即更新</button>
-            <label class="btn btn-outline" style="margin:0">
-              <span class="icon" v-html="ic('i-up')"></span> 上传更新包
-              <input type="file" accept=".tar.gz,.tgz" style="display:none" @change="uploadUpdate">
-            </label>
+            <button class="btn btn-primary" @click="saveOpenclaw">保存连接</button>
+            <button class="btn btn-outline" @click="testOpenclaw"><span class="icon" v-html="ic('i-link')"></span> 测试连接</button>
           </div>
-          <p class="hint mt-8" v-if="updating" style="color:var(--warning)">更新任务已提交，正在等待独立更新器构建并重启服务...</p>
-          <p class="hint mt-8" v-if="updateStatus.message" :style="{color: updateStatus.status==='failed' ? 'var(--danger)' : (updateStatus.status==='success' ? 'var(--success)' : 'var(--warning)')}">
-            更新状态：{{ updateStatus.message }} <button class="btn btn-sm btn-outline" @click="loadUpdateStatus">刷新状态</button>
-          </p>
+          <p class="hint mt-8" v-if="ocTestMsg" :style="{color: ocTestMsg.ok ? 'var(--success)' : 'var(--danger)'}">{{ ocTestMsg.message }}</p>
+          <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
+          <div class="form-group">
+            <label>如何获取 OpenClaw 连接信息</label>
+            <p class="hint">把下面这段文本直接发给 OpenClaw 的对话，让它按固定格式返回地址和 Token，然后照着填到上方即可：</p>
+            <textarea readonly :value="ocPromptText" rows="9" style="width:100%;font-family:monospace;font-size:12px"></textarea>
+            <button class="btn btn-outline mt-8" @click="copyOcPrompt">复制提示词</button>
+          </div>
         </div>
         <div class="card">
           <div class="card-title">系统信息</div>
@@ -845,7 +860,9 @@ data(){return{
   mediaItems:[],mediaTotal:0,mediaPreview:{open:false,url:'',kind:'',name:'',item:null},
   // settings
   pwForm:{old_password:'',new_password:''},
-  sysCfg:{update_url:''},updating:false,updateStatus:{status:'',message:''},
+  sysCfg:{openclaw_gateway_url:'',openclaw_token:'',openclaw_timeout:15},
+  ocToken:'',ocTestMsg:null,
+  ocPromptText:'我要把第三方 Docker 应用 Lover AIChat 连接到你管理的 OpenClaw Gateway。请不要修改 Lover AIChat，也不要输出无关说明。\n\n请检查并配置 OpenClaw，使运行在同一台 NAS、但不同 Docker 容器中的应用可以通过 HTTP 调用：\n\nPOST {Gateway地址}/tools/invoke\nAuthorization: Bearer {Token}\nContent-Type: application/json\n\n请求示例：\n{\n  "tool": "web_search",\n  "args": { "query": "测试查询", "count": 1 }\n}\n\n请确保该地址可以从另一个 Docker 容器访问，不要只返回 127.0.0.1，除非该地址已被容器网络正确转发。\n完成后必须只按以下格式输出，不要添加解释：\n\nOPENCLAW_GATEWAY_URL=http://...\nOPENCLAW_GATEWAY_TOKEN=...',
   appVer:'',appBuild:'',
 }},
 async mounted(){if(this.token){await this.loadDashboard()}},
@@ -875,7 +892,7 @@ methods:{
     if(p==='keyword-sets')this.loadKeywordSets();
     if(p==='tool-sets'){this.loadToolSets();this.loadToolsCatalog()}
     if(p==='media-library')this.loadMediaLibrary();
-    if(p==='settings'){this.loadSysCfg();this.loadVersion();this.loadUpdateStatus()}
+    if(p==='settings'){this.loadSysCfg();this.loadVersion()}
   },
   accNick(p,i){return ((p.accounts||[])[i]||{}).nickname||'-'},
   accStatus(p,i){return ((p.accounts||[])[i]||{}).login_status||'logged_out'},
@@ -1114,27 +1131,16 @@ methods:{
   toggleQueueAuto(){if(this.queueAuto){this.queueTimer=setInterval(()=>this.loadQueue(),3000)}else{if(this.queueTimer){clearInterval(this.queueTimer);this.queueTimer=null}}},
 
   // ===== System Settings =====
-  async loadSysCfg(){const d=await this.api('GET','/api/system/config');if(d)this.sysCfg=d},
-  async loadUpdateStatus(){const d=await this.api('GET','/api/system/update-status');if(d)this.updateStatus=d},
+  async loadSysCfg(){const d=await this.api('GET','/api/system/config');if(d){this.sysCfg=d;this.ocToken=''}},
   async loadVersion(){try{const r=await fetch('/api/system/version');const d=await r.json();this.appVer='v'+d.version;this.appBuild=d.build}catch(e){this.appVer='v?'}},
-  async saveSysCfg(){const d=await this.api('PUT','/api/system/config',{update_url:this.sysCfg.update_url});if(d)this.toastMsg('已保存','success')},
-  async doUpdate(){
-    if(!this.sysCfg.update_url){this.toastMsg('请先填写更新源 URL','error');return}
-    if(!confirm('确定从更新源下载并更新? 服务将自动重启.'))return;
-    this.updating=true;
-    const d=await this.api('POST','/api/system/update');
-    if(d){this.toastMsg(d.message,'success');await this.loadUpdateStatus()}
-    this.updating=false;
+  async saveOpenclaw(){
+    const body={openclaw_gateway_url:this.sysCfg.openclaw_gateway_url||'',openclaw_timeout:this.sysCfg.openclaw_timeout||15};
+    if(this.ocToken)body.openclaw_token=this.ocToken;
+    const d=await this.api('PUT','/api/system/config',body);
+    if(d){this.toastMsg('已保存','success');this.ocToken='';await this.loadSysCfg()}
   },
-  async uploadUpdate(e){
-    const file=e.target.files[0];if(!file)return;
-    if(!confirm('确定上传并更新? 服务将自动重启.'))return;
-    const fd=new FormData();fd.append('file',file);
-    this.updating=true;
-    const d=await this.api('POST','/api/system/update-upload',fd,true);
-    if(d){this.toastMsg(d.message,'success');await this.loadUpdateStatus()}
-    this.updating=false;e.target.value='';
-  },
+  async testOpenclaw(){const d=await this.api('POST','/api/openclaw/test');if(d)this.ocTestMsg=d},
+  copyOcPrompt(){navigator.clipboard.writeText(this.ocPromptText).then(()=>this.toastMsg('已复制提示词','success')).catch(()=>this.toastMsg('复制失败，请手动选择','error'))},
 },
 watch:{
   tab(v){

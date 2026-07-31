@@ -103,6 +103,7 @@ class PairUpdate(BaseModel):
     vision_model_id: Optional[int] = None
     auto_start: Optional[bool] = None
     refresh_window_command: Optional[str] = None
+    ai_toggle_command: Optional[str] = None
     max_consecutive_downlinks: Optional[int] = Field(None, ge=1, le=8)
 
 class AccountUpdate(BaseModel):
